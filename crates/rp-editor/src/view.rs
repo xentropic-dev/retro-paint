@@ -13,7 +13,9 @@ use rp_palette_dither::Rgb;
 use crate::canvas_view::{self, CanvasCache};
 use crate::filter_panel::FilterPanel;
 use crate::layers_panel::LayersPanel;
-use crate::render_worker::{Overlay, RenderJob, Request, WorkerClient, next_request};
+use crate::render_worker::{
+    CanvasReceiver, Overlay, RenderJob, Request, TIMING_ENV, WorkerClient, next_request,
+};
 use crate::state::{EditorState, FileCommand, Outcome, ViewCommand, shortcut_label, tool_label};
 use crate::viewport::Vec2;
 
@@ -98,7 +100,12 @@ pub(crate) struct EditorView {
 }
 
 impl EditorView {
-    pub(crate) fn new(worker: WorkerClient, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(
+        worker: WorkerClient,
+        canvas: CanvasReceiver,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         let state = cx.new(|_| EditorState::new());
@@ -120,7 +127,38 @@ impl EditorView {
             canvas_origin: point(px(0.), px(0.)),
         };
         this.sync_worker(cx);
+        this.receive_canvas(canvas, cx);
         this
+    }
+
+    /// Takes each flattened document the render worker publishes and
+    /// repaints. Runs as a GPUI task: awaiting never blocks the UI thread,
+    /// and the canvas keeps showing the previous image meanwhile.
+    fn receive_canvas(&self, canvas: CanvasReceiver, cx: &mut Context<Self>) {
+        let timing = std::env::var_os(TIMING_ENV).is_some();
+        cx.spawn(async move |this, cx| {
+            while let Some(frame) = canvas.next().await {
+                let requested = frame.requested;
+                let alive = this.update(cx, |v, cx| {
+                    let t = std::time::Instant::now();
+                    if v.canvas_cache.accept(frame) {
+                        cx.notify();
+                    }
+                    if timing {
+                        eprintln!(
+                            "editor: canvas image shown {:.2?} after doc change \
+                             (UI thread {:.2?})",
+                            requested.elapsed(),
+                            t.elapsed()
+                        );
+                    }
+                });
+                if alive.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
     /// Hands the render worker whatever changed since the last call: a
@@ -299,7 +337,7 @@ impl EditorView {
                             f32::from(bounds.size.width),
                             f32::from(bounds.size.height),
                         );
-                        let plan = cache.prepare(s, bounds, scale);
+                        let plan = cache.prepare(&s.viewport, bounds, scale);
                         (plan, s.viewport.zoom() != before)
                     })
                 });

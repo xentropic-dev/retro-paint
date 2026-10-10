@@ -11,5 +11,7 @@ rp-format.workspace = true
 rp-brush.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true
+# Wakes the GPUI task that receives canvas images from the render worker.
+async-channel = "2"
 # Only for `image::Frame`, which GPUI's `RenderImage` is built from; same major as GPUI's.
 image = { version = "0.25", default-features = false }

@@ -153,7 +153,8 @@ pub struct EditorState {
     /// the render worker's snapshots; mutate through `Arc::make_mut`.
     pub sources: Arc<SourceStore>,
     /// Bumped whenever the document's pixels may have changed; the view
-    /// re-flattens only when this differs from what it last drew.
+    /// asks the render worker for a new flatten + dither when this differs
+    /// from what it last sent, and tags the results with it.
     pub doc_version: u64,
     /// Zoom and scroll of the canvas area.
     pub viewport: Viewport,
@@ -225,12 +226,6 @@ impl EditorState {
     /// Call after any edit that can change the flattened image.
     pub fn mark_document_changed(&mut self) {
         self.doc_version = self.doc_version.wrapping_add(1);
-    }
-
-    /// Flattens the document. The view calls this only when
-    /// [`EditorState::doc_version`] changed.
-    pub fn flatten(&self) -> RgbaImage {
-        self.document.flatten(&self.sources)
     }
 
     /// Records the canvas area's size; refits while [`EditorState::auto_fit`].

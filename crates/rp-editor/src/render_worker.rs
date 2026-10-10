@@ -14,17 +14,25 @@
 //! the newest overlay. An overlay-only wake-up re-sends the last image
 //! without re-dithering.
 //!
+//! The same flatten also feeds the editor canvas: each render publishes a
+//! [`CanvasFrame`] (the flattened image, already BGRA for GPUI, tagged with
+//! its `doc_version`) to a latest-only [`LatestSlot`] and wakes the
+//! [`CanvasReceiver`] the view awaits. The UI thread never flattens.
+//!
 //! Shutdown: [`RenderWorker::shutdown`] (also on drop) wakes the thread,
 //! lets it finish the frame in progress, and joins it.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
+#[cfg(test)]
+use std::time::Duration;
 use std::time::Instant;
 
 use rp_doc::{Document, FrameMsg, IndexedFrame, Layout, OutputPoint, Size, SourceStore, Tool};
 use rp_palette_dither::{CgaColor, Palette, Renderer, Rgb};
 
+use crate::canvas_image::rgba_into_bgra;
 use crate::state::EditorState;
 use crate::viewport::Vec2;
 
@@ -44,6 +52,8 @@ pub const TIMING_ENV: &str = "RP_RENDER_TIMING";
 pub struct RenderJob {
     pub document: Document,
     pub sources: Arc<SourceStore>,
+    /// [`EditorState::doc_version`] of the snapshot.
+    pub version: u64,
     /// When the UI thread asked for it (for latency logging).
     pub requested: Instant,
 }
@@ -53,9 +63,132 @@ impl RenderJob {
         Self {
             document: state.document.clone(),
             sources: state.sources.clone(),
+            version: state.doc_version,
             requested: Instant::now(),
         }
     }
+}
+
+/// The flattened document for the editor canvas, ready for GPUI: straight
+/// BGRA, `width × height`, row-major.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CanvasFrame {
+    /// The [`EditorState::doc_version`] it was flattened from.
+    pub version: u64,
+    pub width: u32,
+    pub height: u32,
+    pub bgra: Vec<u8>,
+    /// When the UI thread asked for it (for latency logging).
+    pub requested: Instant,
+}
+
+/// Something tagged with a document version.
+pub trait Versioned {
+    fn version(&self) -> u64;
+}
+
+impl Versioned for CanvasFrame {
+    fn version(&self) -> u64 {
+        self.version
+    }
+}
+
+/// A latest-only mailbox between threads: holds at most one value, and a
+/// value older than the one already held is dropped.
+pub struct LatestSlot<T> {
+    value: Mutex<Option<T>>,
+}
+
+impl<T> Default for LatestSlot<T> {
+    fn default() -> Self {
+        Self {
+            value: Mutex::new(None),
+        }
+    }
+}
+
+impl<T: Versioned> LatestSlot<T> {
+    /// Stores `value` unless the slot holds a newer one. Returns whether it
+    /// was stored.
+    pub fn publish(&self, value: T) -> bool {
+        let mut slot = self.value.lock().expect("latest slot lock");
+        if slot.as_ref().is_some_and(|v| v.version() > value.version()) {
+            return false;
+        }
+        *slot = Some(value);
+        true
+    }
+
+    /// Takes the held value, leaving the slot empty.
+    pub fn take(&self) -> Option<T> {
+        self.value.lock().expect("latest slot lock").take()
+    }
+}
+
+/// Worker side of the canvas feed: publishes to the slot and wakes the
+/// receiver. Wake-ups coalesce (a one-message channel), and the receiver
+/// always takes from the slot after waking, so none is lost.
+pub struct CanvasSender {
+    slot: Arc<LatestSlot<CanvasFrame>>,
+    wake: async_channel::Sender<()>,
+}
+
+impl CanvasSender {
+    pub fn send(&self, frame: CanvasFrame) {
+        if self.slot.publish(frame) {
+            let _ = self.wake.try_send(());
+        }
+    }
+}
+
+/// UI side of the canvas feed. Await [`CanvasReceiver::next`] from a GPUI
+/// task; it never blocks the thread.
+pub struct CanvasReceiver {
+    slot: Arc<LatestSlot<CanvasFrame>>,
+    wake: async_channel::Receiver<()>,
+}
+
+impl CanvasReceiver {
+    /// The newest frame published since the last call, waiting for one if
+    /// there is none. `None` once the worker has shut down.
+    pub async fn next(&self) -> Option<CanvasFrame> {
+        loop {
+            if let Some(f) = self.slot.take() {
+                return Some(f);
+            }
+            self.wake.recv().await.ok()?;
+        }
+    }
+
+    /// Blocks until a frame arrives, the worker shuts down, or `timeout`
+    /// passes. For tests.
+    #[cfg(test)]
+    fn next_blocking(&self, timeout: Duration) -> Option<CanvasFrame> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Some(f) = self.slot.take() {
+                return Some(f);
+            }
+            let closed = self.wake.is_closed() && self.wake.is_empty();
+            if closed || Instant::now() >= deadline {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+}
+
+/// A connected canvas sender/receiver pair.
+pub fn canvas_feed() -> (CanvasSender, CanvasReceiver) {
+    let slot = Arc::new(LatestSlot::default());
+    let (tx, rx) = async_channel::bounded(1);
+    (
+        CanvasSender {
+            slot: slot.clone(),
+            wake: tx,
+        },
+        CanvasReceiver { slot, wake: rx },
+    )
 }
 
 /// Everything in a [`FrameMsg`] besides the image: cheap to change, never
@@ -150,10 +283,12 @@ impl WorkerCore {
         self.renders
     }
 
-    /// Flattens and dithers `job`, keeping the result as the current image.
-    pub fn render(&mut self, job: &RenderJob) {
+    /// Flattens and dithers `job`, keeping the dithered result as the
+    /// current image, and returns the flattened image for the canvas.
+    pub fn render(&mut self, job: &RenderJob) -> CanvasFrame {
         let doc = &job.document;
         let flat = doc.flatten(&job.sources);
+        let (width, height) = (flat.width(), flat.height());
         let c = doc.canvas_size;
         let o = doc.output_size;
         let img = self.renderer.render(
@@ -164,6 +299,13 @@ impl WorkerCore {
         );
         self.image = Some(img.into());
         self.renders += 1;
+        CanvasFrame {
+            version: job.version,
+            width,
+            height,
+            bgra: rgba_into_bgra(flat.into_raw()),
+            requested: job.requested,
+        }
     }
 
     /// The foreground as the nearest color of `palette` (OKLab, through the
@@ -242,8 +384,10 @@ pub struct RenderWorker {
 }
 
 impl RenderWorker {
-    /// Starts the worker thread; frames go to `sink`.
-    pub fn spawn(sink: FrameSink) -> (Self, WorkerClient) {
+    /// Starts the worker thread; DOS frames go to `sink`, flattened canvas
+    /// images to the returned [`CanvasReceiver`].
+    pub fn spawn(sink: FrameSink) -> (Self, WorkerClient, CanvasReceiver) {
+        let (canvas_tx, canvas_rx) = canvas_feed();
         let shared = Arc::new(Shared {
             pending: Mutex::new(Pending::default()),
             wake: Condvar::new(),
@@ -254,7 +398,7 @@ impl RenderWorker {
             .name("render-worker".into())
             .spawn({
                 let shared = shared.clone();
-                move || worker_loop(&shared, sink, timing)
+                move || worker_loop(&shared, sink, canvas_tx, timing)
             })
             .expect("spawn render worker");
         let client = WorkerClient {
@@ -266,6 +410,7 @@ impl RenderWorker {
                 thread: Some(thread),
             },
             client,
+            canvas_rx,
         )
     }
 
@@ -286,7 +431,7 @@ impl Drop for RenderWorker {
     }
 }
 
-fn worker_loop(shared: &Shared, mut sink: FrameSink, timing: bool) {
+fn worker_loop(shared: &Shared, mut sink: FrameSink, canvas: CanvasSender, timing: bool) {
     let mut core = WorkerCore::new();
     let mut overlay = None;
     loop {
@@ -305,7 +450,7 @@ fn worker_loop(shared: &Shared, mut sink: FrameSink, timing: bool) {
         }
         let rendered = job.map(|job| {
             let t = Instant::now();
-            core.render(&job);
+            canvas.send(core.render(&job));
             shared.renders.store(core.renders(), Ordering::Relaxed);
             (job.requested, t.elapsed())
         });
@@ -329,7 +474,7 @@ mod tests {
     use rp_doc::{Layer, LayerKind, RgbaImage};
     use rp_palette_dither::{FourColor, Intensity, PaletteChoice, Preset};
     use std::sync::mpsc;
-    use std::time::Duration;
+    use std::task::{Context, Poll, Waker};
 
     const TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -347,11 +492,32 @@ mod tests {
     }
 
     fn job(doc: Document) -> RenderJob {
+        job_v(doc, 0)
+    }
+
+    fn job_v(doc: Document, version: u64) -> RenderJob {
         RenderJob {
             document: doc,
             sources: Arc::new(SourceStore::new()),
+            version,
             requested: Instant::now(),
         }
+    }
+
+    fn canvas_frame(version: u64) -> CanvasFrame {
+        CanvasFrame {
+            version,
+            width: 1,
+            height: 1,
+            bgra: vec![0, 0, 0, 255],
+            requested: Instant::now(),
+        }
+    }
+
+    /// Polls `fut` once.
+    fn poll_once<F: Future>(fut: F) -> Poll<F::Output> {
+        let mut fut = std::pin::pin!(fut);
+        fut.as_mut().poll(&mut Context::from_waker(Waker::noop()))
     }
 
     fn overlay() -> Overlay {
@@ -517,7 +683,7 @@ mod tests {
                 let _ = gate_rx.recv_timeout(TIMEOUT);
             }
         });
-        let (mut worker, client) = RenderWorker::spawn(sink);
+        let (mut worker, client, _canvas) = RenderWorker::spawn(sink);
         client.render(job(solid_doc(CgaColor::Black)), overlay());
         let first = rx.recv_timeout(TIMEOUT).expect("first frame");
         assert!(first.image.pixels.iter().all(|&c| c == CgaColor::Black));
@@ -544,7 +710,7 @@ mod tests {
     #[test]
     fn overlay_only_update_resends_without_rerender() {
         let (sink, rx) = channel_sink();
-        let (mut worker, client) = RenderWorker::spawn(sink);
+        let (mut worker, client, _canvas) = RenderWorker::spawn(sink);
         client.render(job(solid_doc(CgaColor::Green)), overlay());
         let a = rx.recv_timeout(TIMEOUT).unwrap();
         let mut ov = overlay();
@@ -564,7 +730,7 @@ mod tests {
     #[test]
     fn overlay_before_first_render_sends_nothing() {
         let (sink, rx) = channel_sink();
-        let (mut worker, client) = RenderWorker::spawn(sink);
+        let (mut worker, client, _canvas) = RenderWorker::spawn(sink);
         client.overlay(overlay());
         assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
         worker.shutdown();
@@ -573,7 +739,7 @@ mod tests {
     #[test]
     fn shutdown_joins_and_drops_the_sink() {
         let (sink, rx) = channel_sink();
-        let (mut worker, client) = RenderWorker::spawn(sink);
+        let (mut worker, client, _canvas) = RenderWorker::spawn(sink);
         client.render(job(solid_doc(CgaColor::Cyan)), overlay());
         rx.recv_timeout(TIMEOUT).unwrap();
         worker.shutdown();
@@ -591,12 +757,98 @@ mod tests {
     #[test]
     fn drop_joins_the_thread() {
         let (sink, rx) = channel_sink();
-        let (worker, _client) = RenderWorker::spawn(sink);
+        let (worker, _client, _canvas) = RenderWorker::spawn(sink);
         drop(worker);
         assert_eq!(
             rx.recv_timeout(TIMEOUT),
             Err(mpsc::RecvTimeoutError::Disconnected)
         );
+    }
+
+    #[test]
+    fn slot_keeps_the_newest_and_drops_stale() {
+        let slot = LatestSlot::default();
+        assert!(slot.take().is_none());
+        assert!(slot.publish(canvas_frame(3)));
+        assert!(!slot.publish(canvas_frame(2)), "older than the held one");
+        assert!(slot.publish(canvas_frame(5)));
+        assert_eq!(slot.take().map(|f| f.version), Some(5));
+        assert!(slot.take().is_none(), "take empties the slot");
+        // Once taken, ordering is the receiver's job (see CanvasCache).
+        assert!(slot.publish(canvas_frame(1)));
+    }
+
+    #[test]
+    fn receiver_wakes_for_published_frames_and_ends_on_shutdown() {
+        let (tx, rx) = canvas_feed();
+        assert!(poll_once(rx.next()).is_pending(), "nothing yet");
+        tx.send(canvas_frame(1));
+        tx.send(canvas_frame(2));
+        tx.send(canvas_frame(0)); // stale: dropped
+        match poll_once(rx.next()) {
+            Poll::Ready(Some(f)) => assert_eq!(f.version, 2),
+            other => panic!("expected frame 2, got {other:?}"),
+        }
+        // The leftover wake-up finds an empty slot and keeps waiting.
+        assert!(poll_once(rx.next()).is_pending());
+        tx.send(canvas_frame(3));
+        drop(tx);
+        // A frame published before shutdown is still delivered, then None.
+        assert!(matches!(poll_once(rx.next()), Poll::Ready(Some(f)) if f.version == 3));
+        assert!(matches!(poll_once(rx.next()), Poll::Ready(None)));
+    }
+
+    #[test]
+    fn core_render_returns_the_flattened_canvas_as_bgra() {
+        let mut core = WorkerCore::new();
+        let doc = solid_doc(CgaColor::Red);
+        let expect = doc.flatten(&SourceStore::new());
+        let frame = core.render(&job_v(doc, 7));
+        assert_eq!(frame.version, 7);
+        assert_eq!((frame.width, frame.height), (8, 8));
+        assert_eq!(frame.bgra, crate::canvas_image::rgba_to_bgra(&expect));
+        let Rgb { r, g, b } = CgaColor::Red.into();
+        assert_eq!(&frame.bgra[..4], &[b, g, r, 255]);
+    }
+
+    #[test]
+    fn worker_publishes_the_canvas_for_each_render() {
+        let (sink, rx) = channel_sink();
+        let (mut worker, client, canvas) = RenderWorker::spawn(sink);
+        client.render(job_v(solid_doc(CgaColor::Green), 4), overlay());
+        let f = canvas.next_blocking(TIMEOUT).expect("canvas frame");
+        assert_eq!(f.version, 4);
+        rx.recv_timeout(TIMEOUT).expect("DOS frame");
+        // Overlay-only updates do not re-flatten.
+        client.overlay(overlay());
+        rx.recv_timeout(TIMEOUT).expect("DOS frame");
+        assert!(canvas.next_blocking(Duration::from_millis(50)).is_none());
+        worker.shutdown();
+        assert!(canvas.next_blocking(TIMEOUT).is_none(), "feed closed");
+    }
+
+    #[test]
+    fn canvas_burst_delivers_the_newest() {
+        // Hold the worker in the DOS sink on the first frame so a burst of
+        // renders piles up; the canvas receiver sees the last version.
+        let (gate_tx, gate_rx) = mpsc::channel::<()>();
+        let mut sent = 0;
+        let sink: FrameSink = Box::new(move |_| {
+            sent += 1;
+            if sent == 1 {
+                let _ = gate_rx.recv_timeout(TIMEOUT);
+            }
+        });
+        let (mut worker, client, canvas) = RenderWorker::spawn(sink);
+        client.render(job_v(solid_doc(CgaColor::Black), 1), overlay());
+        assert_eq!(canvas.next_blocking(TIMEOUT).map(|f| f.version), Some(1));
+        for v in 2..8 {
+            client.render(job_v(solid_doc(CgaColor::Blue), v), overlay());
+        }
+        gate_tx.send(()).unwrap();
+        assert_eq!(canvas.next_blocking(TIMEOUT).map(|f| f.version), Some(7));
+        worker.shutdown();
+        assert_eq!(client.renders(), 2);
     }
 
     /// Timing of the steps on a fresh 800×1280 document with four paint

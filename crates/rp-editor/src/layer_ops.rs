@@ -416,7 +416,13 @@ mod tests {
         assert!(!st.document.layer(id).unwrap().visible);
         assert_ne!(st.doc_version, v);
         // Hidden white background flattens to transparent.
-        assert!(st.flatten().as_raw().iter().all(|&b| b == 0));
+        assert!(
+            st.document
+                .flatten(&st.sources)
+                .as_raw()
+                .iter()
+                .all(|&b| b == 0)
+        );
         st.toggle_visibility(id);
         assert!(st.document.layer(id).unwrap().visible);
     }
@@ -483,7 +489,13 @@ mod tests {
         assert_eq!(mask.size(), NEW_CANVAS_SIZE);
         assert!(mask.as_raw().iter().all(|&b| b == 255));
         // A white mask shows the whole layer.
-        assert!(st.flatten().as_raw().iter().all(|&b| b == 255));
+        assert!(
+            st.document
+                .flatten(&st.sources)
+                .as_raw()
+                .iter()
+                .all(|&b| b == 255)
+        );
         assert!(!st.add_mask(id));
         let v = st.doc_version;
         assert!(st.remove_mask(id));

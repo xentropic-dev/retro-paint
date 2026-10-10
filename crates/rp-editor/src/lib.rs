@@ -5,9 +5,11 @@
 //! (Layers, Filter, Swatches) and a status bar. Logic lives in [`state`];
 //! the GPUI view is thin.
 //!
-//! The [`render_worker`] dithers the document off the UI thread and hands
-//! each [`rp_doc::FrameMsg`] to a [`FrameSink`]. The binary forwards those
-//! frames to the DOS view; the editor never depends on `rp-dos`.
+//! The [`render_worker`] flattens and dithers the document off the UI
+//! thread and hands each [`rp_doc::FrameMsg`] to a [`FrameSink`]. The binary
+//! forwards those frames to the DOS view; the editor never depends on
+//! `rp-dos`. The same flattened image comes back to the canvas view, so the
+//! UI thread never flattens.
 
 pub mod canvas_image;
 mod canvas_view;
@@ -33,7 +35,7 @@ pub const APP_ID: &str = "retro-paint-editor";
 /// Frames for the DOS view go to `sink` from the render worker thread, which
 /// is stopped and joined before this returns.
 pub fn run(sink: FrameSink) {
-    let (mut worker, client) = RenderWorker::spawn(sink);
+    let (mut worker, client, canvas) = RenderWorker::spawn(sink);
     gpui_platform::application().run(move |cx: &mut App| {
         view::bind_keys(cx);
         let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
@@ -47,7 +49,7 @@ pub fn run(sink: FrameSink) {
             ..Default::default()
         };
         cx.open_window(options, |window, cx| {
-            cx.new(|cx| EditorView::new(client, window, cx))
+            cx.new(|cx| EditorView::new(client, canvas, window, cx))
         })
         .expect("open editor window");
         cx.on_window_closed(|cx, _| cx.quit()).detach();

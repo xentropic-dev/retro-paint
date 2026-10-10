@@ -24,11 +24,15 @@ pub const SHARP_MIN_DEVICE_ZOOM: f32 = 2.0;
 
 /// Straight RGBA → straight BGRA, the layout GPUI's `RenderImage` expects.
 pub fn rgba_to_bgra(img: &RgbaImage) -> Vec<u8> {
-    let mut out = img.as_raw().to_vec();
-    for px in out.as_chunks_mut::<4>().0 {
-        px.swap(0, 2);
+    rgba_into_bgra(img.as_raw().to_vec())
+}
+
+/// [`rgba_to_bgra`] in place, reusing the buffer.
+pub fn rgba_into_bgra(mut px: Vec<u8>) -> Vec<u8> {
+    for p in px.as_chunks_mut::<4>().0 {
+        p.swap(0, 2);
     }
-    out
+    px
 }
 
 /// A `width × height` opaque BGRA checkerboard of [`CHECKER`]-pixel squares,
