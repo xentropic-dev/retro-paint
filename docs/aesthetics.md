@@ -56,7 +56,7 @@ Three separate sizes are involved:
 Navigation:
 
 - **Native editor:** the canvas can be scrolled and zoomed.
-- **DOS app:** the output image can only be scrolled, never zoomed, because it is always shown 1:1 in DOS screen pixels. It auto-scrolls to keep the cursor's position in view, like an old paint program panning as you paint near the edge. It ignores the native editor's zoom level.
+- **DOS app:** the output image can only be scrolled, never zoomed, because it is always shown 1:1 in DOS screen pixels. It auto-scrolls to keep the cursor's position in view, like an old paint program panning as you paint near the edge. It ignores the native editor's zoom level. The window pans when the cursor comes within 16 output pixels of an edge and never scrolls past the image; on an axis where the image is smaller than the window, the image is centered on a dark gray backdrop.
 
 ## DOS view (right)
 
