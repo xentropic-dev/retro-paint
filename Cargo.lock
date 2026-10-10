@@ -4357,6 +4357,10 @@ dependencies = [
 [[package]]
 name = "rp-palette-dither"
 version = "0.1.0"
+dependencies = [
+ "png 0.18.1",
+ "rp-palette-dither",
+]
 
 [[package]]
 name = "rustc-demangle"

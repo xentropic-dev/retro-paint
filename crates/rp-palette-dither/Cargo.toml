@@ -9,3 +9,9 @@ license.workspace = true
 [features]
 # Exports `test_util::assert_palette_only` for other crates' tests.
 test-util = []
+
+[dev-dependencies]
+# Golden PNG tests only.
+png = "0.18"
+# Turns on `test-util` for this crate's own integration tests.
+rp-palette-dither = { path = ".", features = ["test-util"] }

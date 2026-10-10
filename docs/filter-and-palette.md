@@ -84,6 +84,8 @@ output    = nearest_palette(color')
 
 `spread` controls how strong the pattern is. It could be a user-facing parameter.
 
+In retro-paint the offset is added to the gamma-encoded sRGB channels (`0.0..=1.0`), not to linear light: a fixed step is roughly perceptually even in sRGB, and the CGA levels (0, 85, 170, 255) are evenly spaced there. The default spread is one CGA step, `85/255`.
+
 Pros:
 - each pixel is independent, so it is fast and parallelizable
 - stable: small edits don't ripple across the image, which matters for interactive editing
@@ -161,6 +163,8 @@ Because Atkinson throws away part of the error, it gives higher contrast and cle
 Error diffusion options:
 - **Serpentine scanning.** Alternate left-to-right and right-to-left on each row to reduce directional streaking.
 - **Error clamping or strength.** Scale the diffused error (for example, 0–100%) to tone down noise.
+
+In retro-paint each pixel plus its received error is clamped to `-1.0..=2.0` in linear light before quantizing. Clamping at the gamut (`0..=1`) would bias the average, because OKLab nearest-color splits are not at linear midpoints; the wider clamp still bounds the error when a palette subset cannot reach the input color. Taps outside the image are dropped.
 
 Pros:
 - best color accuracy for a 16-color palette
