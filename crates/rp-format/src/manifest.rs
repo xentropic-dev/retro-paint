@@ -71,7 +71,9 @@ pub enum PaletteDto {
         background: CgaDto,
     },
     /// Colors in palette order.
-    Custom { colors: Vec<CgaDto> },
+    Custom {
+        colors: Vec<CgaDto>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]

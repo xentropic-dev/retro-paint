@@ -39,6 +39,18 @@ project.rpaint
 
 `manifest.json` carries an integer `format_version`. On load, older versions are migrated step by step to the current one. Files with a newer version than the app understands are refused with a clear message rather than partly loaded.
 
+### Decisions
+
+Implemented in `crates/rp-format`.
+
+- **Current version: 1.** Version 0 is the pre-release draft (flat `canvas_width` / `canvas_height` / `output_width` / `output_height` fields). No release wrote it; its migration step exists so the chain is tested. Each step rewrites the raw manifest JSON from version `n` to `n + 1`, and only the final result is parsed.
+- **Manifest names are pinned in rp-format**, not derived from Rust types: snake_case enum names (`floyd_steinberg`, `palette1`, `light_magenta`, …), blend modes by `BlendMode::name`, colors as `#rrggbb`, sizes as `{"width", "height"}`. Palette is `{"kind": "full"}`, `{"kind": "four_color", "preset", "intensity", "background"}` or `{"kind": "custom", "colors": [...]}` in palette order. Floats are written in shortest round-trip form, so they load back bit-exact; NaN or infinity is refused at save.
+- **Entries:** layers are numbered by stack position, 1-based, bottom first (`layers/0001.png`). The manifest names each layer's pixel and mask entries. Pixel PNGs are RGBA8 with straight alpha, masks are 8-bit grayscale, and PNG entries are stored uncompressed in the zip (they are already compressed). `manifest.json` is deflated.
+- **Source hash:** SHA-256 of the decoded image (`width` and `height` as big-endian `u32`, then the RGBA8 bytes), as 64 lowercase hex digits (`rp_format::source_hash`). It hashes pixels, not file bytes. Save and load both check that each source's pixels match its hash. Only sources used by image layers are saved, and each is stored once.
+- **Layer ids are not stored.** Loading assigns fresh ids in stack order.
+- **Saving to a path is atomic:** write `<name>.tmp` next to it, fsync, then rename it over the target.
+- **Errors:** a corrupt archive, missing entry, bad manifest, bad PNG, or hash mismatch each has its own typed error. Loading never panics.
+
 ## PNG export
 
 retro-paint can export a final rasterized render to PNG.

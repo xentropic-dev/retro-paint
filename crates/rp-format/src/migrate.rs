@@ -132,7 +132,10 @@ mod tests {
             }
         ));
         let msg = err.to_string();
-        assert!(msg.contains("version 7") && msg.contains("version 1"), "{msg}");
+        assert!(
+            msg.contains("version 7") && msg.contains("version 1"),
+            "{msg}"
+        );
     }
 
     #[test]
