@@ -9,6 +9,7 @@
 //! on texel centers, so pixels pass through unchanged.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::blend::{BlendMode, byte, unit};
 use crate::document::Document;
@@ -17,9 +18,14 @@ use crate::raster::{GrayImage, RgbaImage, Size};
 
 /// Decoded source images for image layers, keyed by hash. The caller loads
 /// them (from disk or a project file); this crate never does I/O.
+///
+/// Each image sits behind an [`Arc`], so cloning the store copies only the
+/// map of pointers: a render-worker snapshot and the editor's copy share the
+/// full-resolution pixel buffers, and adding a source to one copy never
+/// duplicates the others.
 #[derive(Clone, Default, Debug)]
 pub struct SourceStore {
-    images: HashMap<SourceHash, RgbaImage>,
+    images: HashMap<SourceHash, Arc<RgbaImage>>,
 }
 
 impl SourceStore {
@@ -29,10 +35,20 @@ impl SourceStore {
 
     /// Adds or replaces the image for `hash`.
     pub fn insert(&mut self, hash: SourceHash, image: RgbaImage) {
+        self.insert_arc(hash, Arc::new(image));
+    }
+
+    /// Adds or replaces the image for `hash`, sharing the caller's buffer.
+    pub fn insert_arc(&mut self, hash: SourceHash, image: Arc<RgbaImage>) {
         self.images.insert(hash, image);
     }
 
     pub fn get(&self, hash: &SourceHash) -> Option<&RgbaImage> {
+        self.images.get(hash).map(Arc::as_ref)
+    }
+
+    /// The shared handle for `hash`; cloning it never copies pixels.
+    pub fn get_arc(&self, hash: &SourceHash) -> Option<&Arc<RgbaImage>> {
         self.images.get(hash)
     }
 
@@ -40,8 +56,10 @@ impl SourceStore {
         self.images.contains_key(hash)
     }
 
+    /// Removes the image for `hash`. The pixels are copied only if another
+    /// clone of the store still shares them.
     pub fn remove(&mut self, hash: &SourceHash) -> Option<RgbaImage> {
-        self.images.remove(hash)
+        self.images.remove(hash).map(Arc::unwrap_or_clone)
     }
 
     pub fn len(&self) -> usize {
