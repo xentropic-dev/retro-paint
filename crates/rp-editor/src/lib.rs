@@ -1,15 +1,22 @@
 //! The GPUI full-color editor.
 //!
-//! Spike state: one GPUI window that animates a test pattern (a moving square)
-//! and hands each indexed frame to a callback. The binary forwards those frames
-//! to the DOS view; the editor never depends on `rp-dos`.
+//! One window: an in-window menu bar (GPUI's native app menu does not render
+//! on Wayland), a tool ribbon, the canvas area, a right-side panel column
+//! (Layers, Filter, Swatches) and a status bar. Logic lives in [`state`];
+//! the GPUI view is thin.
+//!
+//! Until the render worker exists, the editor still animates a test pattern
+//! and hands each indexed frame to a callback. The binary forwards those
+//! frames to the DOS view; the editor never depends on `rp-dos`.
+
+pub mod state;
+mod view;
 
 use std::time::Duration;
 
-use gpui::{
-    App, Bounds, Context, TitlebarOptions, Window, WindowBounds, WindowOptions, div, prelude::*,
-    px, rgb, size,
-};
+use gpui::{App, Bounds, TitlebarOptions, WindowBounds, WindowOptions, prelude::*, px, size};
+
+use view::EditorView;
 
 /// Wayland app_id of the editor window.
 pub const APP_ID: &str = "retro-paint-editor";
@@ -57,52 +64,11 @@ pub fn test_pattern(tick: u32) -> Vec<u8> {
 /// Receives each indexed frame: `(width, height, pixels)`.
 pub type FrameSink = Box<dyn FnMut(u32, u32, Vec<u8>)>;
 
-struct Editor {
-    tick: u32,
-    sink: FrameSink,
-}
-
-impl Editor {
-    fn step(&mut self) {
-        self.tick = self.tick.wrapping_add(1);
-        (self.sink)(PATTERN_W, PATTERN_H, test_pattern(self.tick));
-    }
-}
-
-impl Render for Editor {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let (x, y) = square_pos(self.tick);
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .gap_4()
-            .p_4()
-            .bg(rgb(0x202020))
-            .text_color(rgb(0xffffff))
-            .child(format!("retro-paint editor spike - frame {}", self.tick))
-            .child(
-                div()
-                    .relative()
-                    .w(px(PATTERN_W as f32))
-                    .h(px(PATTERN_H as f32))
-                    .bg(rgb(0x3060c0))
-                    .child(
-                        div()
-                            .absolute()
-                            .left(px(x as f32))
-                            .top(px(y as f32))
-                            .size(px(SQUARE as f32))
-                            .bg(rgb(0xffd040)),
-                    ),
-            )
-    }
-}
-
 /// Runs the GPUI editor on the calling (main) thread until the app quits.
 pub fn run(sink: FrameSink) {
     gpui_platform::application().run(move |cx: &mut App| {
-        let bounds = Bounds::centered(None, size(px(480.), px(480.)), cx);
+        view::bind_keys(cx);
+        let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             app_id: Some(APP_ID.into()),
@@ -112,16 +78,15 @@ pub fn run(sink: FrameSink) {
             }),
             ..Default::default()
         };
-        cx.open_window(options, |_, cx| {
+        cx.open_window(options, |window, cx| {
             cx.new(|cx| {
                 cx.spawn(async move |this, cx| {
                     loop {
                         cx.background_executor()
                             .timer(Duration::from_millis(33))
                             .await;
-                        let alive = this.update(cx, |editor: &mut Editor, cx| {
+                        let alive = this.update(cx, |editor: &mut EditorView, _cx| {
                             editor.step();
-                            cx.notify();
                         });
                         if alive.is_err() {
                             break;
@@ -129,7 +94,7 @@ pub fn run(sink: FrameSink) {
                     }
                 })
                 .detach();
-                Editor { tick: 0, sink }
+                EditorView::new(sink, window, cx)
             })
         })
         .expect("open editor window");
