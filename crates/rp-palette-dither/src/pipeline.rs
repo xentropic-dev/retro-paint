@@ -546,4 +546,44 @@ mod tests {
         assert_eq!(PaletteChoice::Full.palette(), Palette::full());
         assert_eq!(PaletteChoice::FourColor(m).palette(), m.palette());
     }
+
+    /// 800×1280 canvas → 200×320 output, the mobile project default. Run
+    /// `cargo test --release -p rp-palette-dither render_is_fast -- --nocapture`
+    /// for the real number.
+    #[test]
+    fn render_is_fast() {
+        let (w, h) = (800u32, 1280u32);
+        let rgba: Vec<u8> = (0..w * h)
+            .flat_map(|i| {
+                let (x, y) = (i % w, i / w);
+                [(x / 4) as u8, (y / 6) as u8, ((x + y) / 8) as u8, 255]
+            })
+            .collect();
+        let mut r = Renderer::new();
+        let adjusted = DitherSettings {
+            adjust: PreAdjust {
+                brightness: 0.1,
+                contrast: 0.2,
+                saturation: 0.3,
+            },
+            ..Default::default()
+        };
+        r.render(&rgba, (w, h), (200, 320), &adjusted);
+        for (name, s) in [
+            ("floyd-steinberg", DitherSettings::default()),
+            ("floyd-steinberg + adjust", adjusted),
+            ("bayer4", DitherSettings::with_method(DitherMethod::Bayer4)),
+        ] {
+            let t = std::time::Instant::now();
+            let n = 5;
+            for _ in 0..n {
+                let out = r.render(&rgba, (w, h), (200, 320), &s);
+                assert_eq!(out.pixels.len(), 200 * 320);
+            }
+            let per = t.elapsed() / n;
+            eprintln!("render 800x1280 -> 200x320 ({name}): {per:?}");
+            // Generous: debug builds are many times slower than release.
+            assert!(per.as_millis() < 3000, "{per:?}");
+        }
+    }
 }

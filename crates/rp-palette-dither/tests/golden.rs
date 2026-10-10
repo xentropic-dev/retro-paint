@@ -340,7 +340,7 @@ fn render_photo_alpha_fade_four_color() {
     // left of the output is composited toward black.
     let img = photo();
     let mut rgba = opaque_rgba(&img);
-    for (i, px) in rgba.chunks_exact_mut(4).enumerate() {
+    for (i, px) in rgba.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let x = (i as u32 % img.width) as f32;
         px[3] = (x / (img.width - 1) as f32 * 255.0 + 0.5) as u8;
     }

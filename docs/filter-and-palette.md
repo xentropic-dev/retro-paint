@@ -194,6 +194,13 @@ Cons:
 4. Apply the dither filter with the chosen method, palette (subset), and color-matching function.
 5. Output an image that contains only palette colors.
 
+In `rp-palette-dither` this is `render(rgba, canvas_size, output_size, &DitherSettings) -> IndexedImage`, the single entry point for the live view and export. The render worker holds a `Renderer`, which runs the same function but caches the `NearestLut` and rebuilds it only when the palette changes. Details per step:
+
+- **Transparency.** `flatten` returns straight-alpha RGBA on a transparent canvas. Each pixel is composited over **black** in linear light (`linear(rgb) · alpha`) before downscaling, so transparent areas render as black, the CGA border color, and a half-transparent edge averages toward black. New documents start with an opaque white Background layer, so this only shows when the user hides or deletes it.
+- **Box downscale.** Area average in linear light. Output pixel `i` covers source `[i·src/dst, (i+1)·src/dst)` on each axis, and each source pixel is weighted by the fraction of it inside that span, so non-integer ratios are handled exactly. It is separable (a horizontal pass, then a vertical one). Equal canvas and output sizes are the identity.
+- **Pre-adjust.** Brightness, contrast and saturation are each `-1.0..=1.0` (the UI's −100..100), neutral `0`, applied in gamma-encoded sRGB in that order and clamped to the gamut: brightness `c + b`; contrast `(c − 0.5)·(1 + k) + 0.5`; saturation `Y + (c − Y)·(1 + s)` with `Y` the Rec. 709 luma of the sRGB values. sRGB because a slider step then looks even across the tone range and the CGA levels are evenly spaced there. All-neutral settings skip the step, so it is exactly the identity.
+- **Measured cost.** An 800×1280 canvas to 200×320 output takes about 8 ms in a release build with Floyd–Steinberg (about 14 ms with non-neutral pre-adjust), plus about 10 ms once whenever the palette changes.
+
 ### User controls (v1)
 
 - Dither method (none, Bayer 4×4, Floyd–Steinberg, Atkinson)
@@ -214,6 +221,8 @@ v1 has one global set of dither settings, applied once after flattening.
 - **First dithering methods:** none (nearest color), Bayer 4×4, Floyd–Steinberg, and Atkinson. The others in this document are candidates for later.
 - **Default color distance:** chroma-weighted OKLab (see "Chroma-weighted OKLab"), baked into a 64×64×64 lookup table at startup, so each pixel costs one table read.
 - **Live and export:** the dither is both. The DOS view re-dithers the full frame live on the CPU, and export uses the same code. With error diffusion, edits can shift patterns elsewhere in the image. This is accepted as part of the look.
+- **Transparency before dithering:** composite over black in linear light, then downscale (see "Pipeline placement").
+- **Pre-adjust space:** gamma-encoded sRGB, controls in `-1.0..=1.0` with `0` neutral.
 - **Palette subsets:** supported. The full 16 colors is the default. The authentic CGA 4-color modes are presets, and the user can also pick any custom subset.
 
 ### 4-color mode presets
