@@ -15,6 +15,7 @@ pub mod canvas_image;
 mod canvas_view;
 pub mod filter_ops;
 mod filter_panel;
+pub mod image_ops;
 pub mod layer_ops;
 mod layers_panel;
 pub mod paint_ops;
