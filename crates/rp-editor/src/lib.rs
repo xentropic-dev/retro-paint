@@ -22,6 +22,7 @@ mod layers_panel;
 pub mod paint_ops;
 pub mod render_worker;
 pub mod state;
+pub mod transform_ops;
 mod view;
 pub mod viewport;
 

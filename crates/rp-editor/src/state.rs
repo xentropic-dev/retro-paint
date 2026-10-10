@@ -11,6 +11,7 @@ use rp_doc::{Document, Layer, LayerId, LayerKind, RgbaImage, Size, SourceStore, 
 use crate::filter_ops::PaletteMemory;
 use crate::layer_ops::RenameEdit;
 use crate::paint_ops::{BrushState, Stroke};
+use crate::transform_ops::TransformDrag;
 use crate::viewport::{Vec2, Viewport};
 
 /// Canvas size of a fresh document: 4× the 200×320 mobile output.
@@ -191,6 +192,11 @@ pub struct EditorState {
     pub brush: BrushState,
     /// Brush or Eraser stroke in progress.
     pub stroke: Option<Stroke>,
+    /// Move / Select drag in progress.
+    pub transform_drag: Option<TransformDrag>,
+    /// Whether shift was held at the last pointer or key event (frees the
+    /// aspect ratio while scaling, snaps the angle while rotating).
+    pub shift_held: bool,
 }
 
 impl Default for EditorState {
@@ -222,6 +228,8 @@ impl EditorState {
             palette_memory: PaletteMemory::default(),
             brush: BrushState::default(),
             stroke: None,
+            transform_drag: None,
+            shift_held: false,
         }
     }
 
@@ -232,6 +240,7 @@ impl EditorState {
         self.selected_layer = document.layers().last().map(Layer::id);
         self.renaming = None;
         self.stroke = None;
+        self.transform_drag = None;
         self.palette_memory = PaletteMemory::default();
         self.document = document;
         self.viewport.set_canvas_size(s.width, s.height);
@@ -276,6 +285,9 @@ impl EditorState {
         self.cursor_canvas = Some(c);
         if self.stroke.is_some() {
             self.continue_stroke(c);
+        }
+        if self.transform_drag.is_some() {
+            self.continue_transform(screen, self.shift_held);
         }
     }
 
