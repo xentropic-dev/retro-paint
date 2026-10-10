@@ -1,12 +1,7 @@
 use rp_brush::{Brush, Mask, Spacer, stamp, stroke_dabs};
 
 fn gray(w: u32, h: u32, data: Vec<u8>) -> Brush {
-    Brush {
-        name: "g".into(),
-        spacing: 25.0,
-        mask: Mask::new(w, h, data),
-        pixmap: None,
-    }
+    Brush::bitmap("g", 25.0, Mask::new(w, h, data), None)
 }
 
 fn px(buf: &[u8], w: u32, x: u32, y: u32) -> [u8; 4] {
@@ -66,12 +61,12 @@ fn stamp_clips_at_edges() {
 
 #[test]
 fn stamp_rgba_brush_uses_pixmap() {
-    let b = Brush {
-        name: "c".into(),
-        spacing: 25.0,
-        mask: Mask::new(2, 1, vec![255, 0]),
-        pixmap: Some(vec![[10, 20, 30], [40, 50, 60]]),
-    };
+    let b = Brush::bitmap(
+        "c",
+        25.0,
+        Mask::new(2, 1, vec![255, 0]),
+        Some(vec![[10, 20, 30], [40, 50, 60]]),
+    );
     let mut buf = vec![0u8; 2 * 4];
     stamp(&mut buf, 2, 1, &b, 1.0, 0.0, [255, 255, 255, 255], 1.0);
     assert_eq!(px(&buf, 2, 0, 0), [10, 20, 30, 255]);

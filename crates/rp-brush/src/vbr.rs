@@ -9,7 +9,7 @@
 //! falloff follows GIMP: `f = (d / radius) ^ (0.4 / (1 - hardness))` passed
 //! through a smooth bell (`1 - 2f²` below 0.5, `2(1 - f)²` above).
 
-use crate::{Brush, BrushError, Mask};
+use crate::{Brush, BrushError, BrushSource, Mask};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shape {
@@ -165,6 +165,7 @@ pub fn generate(p: &VbrParams) -> Brush {
         spacing: p.spacing,
         mask: trim_symmetric(Mask::new(size, size, data)),
         pixmap: None,
+        source: BrushSource::Parametric(p.clone()),
     }
 }
 

@@ -65,10 +65,10 @@ pub fn parse_gbr(data: &[u8]) -> Result<Brush, BrushError> {
         (mask, Some(rgb))
     };
 
-    Ok(Brush {
+    Ok(Brush::bitmap(
         name,
         spacing,
-        mask: Mask::new(width, height, mask),
+        Mask::new(width, height, mask),
         pixmap,
-    })
+    ))
 }
