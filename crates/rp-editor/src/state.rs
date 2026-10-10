@@ -1,6 +1,6 @@
 //! Editor state and File-menu command dispatch, with no GPUI types.
 //!
-//! The GPUI view owns one [`EditorState`] and forwards every menu click and
+//! The GPUI views share one [`EditorState`] entity and forward every menu click and
 //! key binding to [`EditorState::dispatch`]. Commands that the `file-ops`
 //! feature will implement return [`Outcome::NotImplemented`] for now.
 

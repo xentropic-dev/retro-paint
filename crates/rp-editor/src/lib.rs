@@ -11,6 +11,7 @@
 
 pub mod canvas_image;
 mod canvas_view;
+mod layers_panel;
 pub mod state;
 mod view;
 pub mod viewport;

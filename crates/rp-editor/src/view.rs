@@ -2,7 +2,7 @@
 //! status bar. Thin: every decision goes through [`EditorState`].
 
 use gpui::{
-    App, Context, Div, FocusHandle, KeyBinding, KeyDownEvent, KeyUpEvent, MouseButton,
+    App, Context, Div, Entity, FocusHandle, KeyBinding, KeyDownEvent, KeyUpEvent, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Rgba, ScrollDelta,
     ScrollWheelEvent, SharedString, Stateful, Window, actions, canvas, div, point, prelude::*, px,
     rgb,
@@ -12,6 +12,7 @@ use rp_palette_dither::Rgb;
 
 use crate::FrameSink;
 use crate::canvas_view::{self, CanvasCache};
+use crate::layers_panel::LayersPanel;
 use crate::state::{EditorState, FileCommand, Outcome, ViewCommand, shortcut_label, tool_label};
 use crate::viewport::Vec2;
 
@@ -47,24 +48,40 @@ pub fn bind_keys(cx: &mut App) {
 }
 
 // Theme: dark neutral greys, one blue accent.
-const BG_APP: u32 = 0x1e1e1e;
-const BG_BAR: u32 = 0x2b2b2b;
-const BG_RIBBON: u32 = 0x323232;
-const BG_PANEL: u32 = 0x262626;
-const BG_PANEL_HEADER: u32 = 0x303030;
-const BG_HOVER: u32 = 0x3d3d3d;
-const BG_MENU: u32 = 0x2d2d2d;
-const ACCENT: u32 = 0x3d7fd9;
-const BORDER: u32 = 0x111111;
-const TEXT: u32 = 0xdcdcdc;
-const TEXT_DIM: u32 = 0x8a8a8a;
+pub(crate) const BG_APP: u32 = 0x1e1e1e;
+pub(crate) const BG_BAR: u32 = 0x2b2b2b;
+pub(crate) const BG_RIBBON: u32 = 0x323232;
+pub(crate) const BG_PANEL: u32 = 0x262626;
+pub(crate) const BG_PANEL_HEADER: u32 = 0x303030;
+pub(crate) const BG_HOVER: u32 = 0x3d3d3d;
+pub(crate) const BG_MENU: u32 = 0x2d2d2d;
+pub(crate) const ACCENT: u32 = 0x3d7fd9;
+pub(crate) const BORDER: u32 = 0x111111;
+pub(crate) const TEXT: u32 = 0xdcdcdc;
+pub(crate) const TEXT_DIM: u32 = 0x8a8a8a;
 
 const MENU_BAR_H: f32 = 26.;
 const RIBBON_H: f32 = 44.;
 const PANEL_W: f32 = 260.;
 
+/// Runs `f` on the shared state and notifies its observers (every view that
+/// shows it). The single path for mutating [`EditorState`] from a view.
+pub(crate) fn edit_state<T, R>(
+    state: &Entity<EditorState>,
+    cx: &mut Context<T>,
+    f: impl FnOnce(&mut EditorState) -> R,
+) -> R {
+    state.update(cx, |s, cx| {
+        let r = f(s);
+        cx.notify();
+        r
+    })
+}
+
 pub(crate) struct EditorView {
-    pub(crate) state: EditorState,
+    /// Shared with the panel views.
+    pub(crate) state: Entity<EditorState>,
+    layers_panel: Entity<LayersPanel>,
     focus: FocusHandle,
     pub(crate) tick: u32,
     sink: FrameSink,
@@ -77,8 +94,12 @@ impl EditorView {
     pub(crate) fn new(sink: FrameSink, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
+        let state = cx.new(|_| EditorState::new());
+        cx.observe(&state, |_, _, cx| cx.notify()).detach();
+        let layers_panel = cx.new(|cx| LayersPanel::new(state.clone(), cx));
         Self {
-            state: EditorState::new(),
+            state,
+            layers_panel,
             focus,
             tick: 0,
             sink,
@@ -105,12 +126,16 @@ impl EditorView {
         );
     }
 
+    /// Runs `f` on the shared state and redraws every view that shows it.
+    fn edit<R>(&self, cx: &mut Context<Self>, f: impl FnOnce(&mut EditorState) -> R) -> R {
+        edit_state(&self.state, cx, f)
+    }
+
     fn run(&mut self, cmd: FileCommand, _window: &mut Window, cx: &mut Context<Self>) {
-        match self.state.dispatch(cmd) {
+        match self.edit(cx, |s| s.dispatch(cmd)) {
             Outcome::Quit => cx.quit(),
             Outcome::Done | Outcome::NotImplemented(_) => {}
         }
-        cx.notify();
     }
 
     // One handler per action; file-ops replaces the stubs behind them.
@@ -134,7 +159,7 @@ impl EditorView {
     }
 
     fn menu_bar(&self, cx: &mut Context<Self>) -> Div {
-        let open = self.state.file_menu_open;
+        let open = self.state.read(cx).file_menu_open;
         div()
             .flex()
             .flex_row()
@@ -157,8 +182,7 @@ impl EditorView {
                     .hover(|s| s.bg(rgb(BG_HOVER)))
                     .child("File")
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.state.toggle_file_menu();
-                        cx.notify();
+                        this.edit(cx, |s| s.toggle_file_menu());
                     })),
             )
     }
@@ -206,17 +230,15 @@ impl EditorView {
     }
 
     fn ribbon(&self, cx: &mut Context<Self>) -> Div {
-        let doc = &self.state.document;
+        let state = self.state.read(cx);
+        let doc = &state.document;
         let mut tools = div().flex().flex_row().gap_1();
         for tool in Tool::ALL {
-            tools = tools.child(
-                tool_button(tool, self.state.tool == tool).on_click(cx.listener(
-                    move |this, _, _, cx| {
-                        this.state.select_tool(tool);
-                        cx.notify();
-                    },
-                )),
-            );
+            tools = tools.child(tool_button(tool, state.tool == tool).on_click(cx.listener(
+                move |this, _, _, cx| {
+                    this.edit(cx, |s| s.select_tool(tool));
+                },
+            )));
         }
         div()
             .flex()
@@ -247,13 +269,20 @@ impl EditorView {
         let surface = canvas(
             move |bounds, window, cx| {
                 let scale = window.scale_factor();
-                let (plan, zoom_changed) = this.update(cx, |v, _| {
+                let (plan, zoom_changed) = this.update(cx, |v, cx| {
                     v.canvas_origin = bounds.origin;
-                    let before = v.state.viewport.zoom();
-                    v.state
-                        .set_view_size(f32::from(bounds.size.width), f32::from(bounds.size.height));
-                    let plan = v.canvas_cache.prepare(&v.state, bounds, scale);
-                    (plan, v.state.viewport.zoom() != before)
+                    let cache = &mut v.canvas_cache;
+                    // No notify: this runs during layout, and only the
+                    // viewport (not the document) can change here.
+                    v.state.update(cx, |s, _| {
+                        let before = s.viewport.zoom();
+                        s.set_view_size(
+                            f32::from(bounds.size.width),
+                            f32::from(bounds.size.height),
+                        );
+                        let plan = cache.prepare(s, bounds, scale);
+                        (plan, s.viewport.zoom() != before)
+                    })
                 });
                 if zoom_changed {
                     // The status bar was already laid out with the old zoom.
@@ -275,28 +304,26 @@ impl EditorView {
             .child(surface)
             .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _, cx| {
                 let p = this.local(ev.position);
-                this.state.pointer_moved(p);
-                cx.notify();
+                this.edit(cx, |s| s.pointer_moved(p));
             }))
             .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                if !*hovered && this.state.pan_drag.is_none() {
-                    this.state.pointer_left();
-                    cx.notify();
+                if !*hovered && this.state.read(cx).pan_drag.is_none() {
+                    this.edit(cx, |s| s.pointer_left());
                 }
             }))
             .on_mouse_down(
                 MouseButton::Middle,
                 cx.listener(|this, ev: &MouseDownEvent, _, cx| {
-                    this.state.begin_pan(this.local(ev.position));
-                    cx.notify();
+                    let p = this.local(ev.position);
+                    this.edit(cx, |s| s.begin_pan(p));
                 }),
             )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, ev: &MouseDownEvent, _, cx| {
-                    if this.state.space_held {
-                        this.state.begin_pan(this.local(ev.position));
-                        cx.notify();
+                    if this.state.read(cx).space_held {
+                        let p = this.local(ev.position);
+                        this.edit(cx, |s| s.begin_pan(p));
                     }
                 }),
             )
@@ -310,14 +337,13 @@ impl EditorView {
                     ScrollDelta::Lines(p) => ((p.x, p.y), true),
                 };
                 let p = this.local(ev.position);
-                this.state.wheel(p, d.0, d.1, lines, ev.modifiers.control);
-                cx.notify();
+                let ctrl = ev.modifiers.control;
+                this.edit(cx, |s| s.wheel(p, d.0, d.1, lines, ctrl));
             }))
     }
 
     fn view_cmd(&mut self, cmd: ViewCommand, cx: &mut Context<Self>) {
-        self.state.view_command(cmd);
-        cx.notify();
+        self.edit(cx, |s| s.view_command(cmd));
     }
     fn on_zoom_in(&mut self, _: &ZoomIn, _: &mut Window, cx: &mut Context<Self>) {
         self.view_cmd(ViewCommand::ZoomIn, cx);
@@ -333,28 +359,24 @@ impl EditorView {
     }
 
     fn on_pan_end(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if self.state.pan_drag.is_some() {
-            self.state.end_pan();
-            cx.notify();
+        if self.state.read(cx).pan_drag.is_some() {
+            self.edit(cx, |s| s.end_pan());
         }
     }
 
     fn on_key_down(&mut self, ev: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if ev.keystroke.key == "space" && !self.state.space_held {
-            self.state.space_held = true;
-            cx.notify();
+        if ev.keystroke.key == "space" && !self.state.read(cx).space_held {
+            self.edit(cx, |s| s.space_held = true);
         }
     }
 
     fn on_key_up(&mut self, ev: &KeyUpEvent, _: &mut Window, cx: &mut Context<Self>) {
         if ev.keystroke.key == "space" {
-            self.state.space_held = false;
-            cx.notify();
+            self.edit(cx, |s| s.space_held = false);
         }
     }
 
     fn panels(&self) -> Div {
-        let layers = self.state.document.layers().len();
         div()
             .w(px(PANEL_W))
             .h_full()
@@ -363,13 +385,14 @@ impl EditorView {
             .bg(rgb(BG_PANEL))
             .border_l_1()
             .border_color(rgb(BORDER))
-            .child(panel("Layers", format!("{layers} layers")).flex_1())
+            .child(div().flex_1().min_h_0().child(self.layers_panel.clone()))
             .child(panel("Filter", "Dither settings".into()).h(px(220.)))
             .child(panel("Swatches", "No swatches".into()).h(px(140.)))
     }
 
-    fn status_bar(&self) -> Div {
-        let doc = &self.state.document;
+    fn status_bar(&self, cx: &App) -> Div {
+        let state = self.state.read(cx);
+        let doc = &state.document;
         div()
             .flex()
             .flex_row()
@@ -382,7 +405,7 @@ impl EditorView {
             .border_color(rgb(BORDER))
             .text_xs()
             .text_color(rgb(TEXT_DIM))
-            .child(tool_label(self.state.tool))
+            .child(tool_label(state.tool))
             .child(format!(
                 "{}×{} → {}×{}",
                 doc.canvas_size.width,
@@ -390,9 +413,9 @@ impl EditorView {
                 doc.output_size.width,
                 doc.output_size.height
             ))
-            .child(format!("Zoom {}", self.state.zoom_label()))
-            .child(format!("Cursor {}", self.state.cursor_label()))
-            .child(self.state.status.clone())
+            .child(format!("Zoom {}", state.zoom_label()))
+            .child(format!("Cursor {}", state.cursor_label()))
+            .child(state.status.clone())
     }
 }
 
@@ -431,21 +454,24 @@ fn color_chip(c: Rgb) -> Div {
         .border_color(rgb(0x9a9a9a))
 }
 
+/// Panel title strip.
+pub(crate) fn panel_header(title: &'static str) -> Div {
+    div()
+        .px_2()
+        .py_1()
+        .bg(rgb(BG_PANEL_HEADER))
+        .text_xs()
+        .text_color(rgb(TEXT))
+        .child(title)
+}
+
 fn panel(title: &'static str, placeholder: String) -> Div {
     div()
         .flex()
         .flex_col()
         .border_b_1()
         .border_color(rgb(BORDER))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .bg(rgb(BG_PANEL_HEADER))
-                .text_xs()
-                .text_color(rgb(TEXT))
-                .child(title),
-        )
+        .child(panel_header(title))
         .child(
             div()
                 .flex_1()
@@ -458,7 +484,7 @@ fn panel(title: &'static str, placeholder: String) -> Div {
 
 impl Render for EditorView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let menu_open = self.state.file_menu_open;
+        let menu_open = self.state.read(cx).file_menu_open;
         div()
             .id("editor")
             .track_focus(&self.focus)
@@ -491,7 +517,7 @@ impl Render for EditorView {
                     .child(self.canvas_area(cx))
                     .child(self.panels()),
             )
-            .child(self.status_bar())
+            .child(self.status_bar(cx))
             .when(menu_open, |root| {
                 root.child(
                     // Click-away backdrop below the menu bar closes the menu.
@@ -505,8 +531,7 @@ impl Render for EditorView {
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|this, _, _, cx| {
-                                this.state.close_menus();
-                                cx.notify();
+                                this.edit(cx, |s| s.close_menus());
                             }),
                         ),
                 )
