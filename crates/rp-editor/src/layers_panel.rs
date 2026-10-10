@@ -2,7 +2,8 @@
 //!
 //! GIMP/Photoshop-like: controls for the selected layer (blend mode,
 //! opacity, locks, mask) above a list with the top of the stack at the top,
-//! and New / Delete / Up / Down buttons below it. Click a row to select it,
+//! and New / Image / Delete / Up / Down buttons below it (Image is Insert
+//! Image…). Click a row to select it,
 //! double-click its name to rename it inline (Enter applies, Escape cancels,
 //! clicking elsewhere applies). Thin: every command is an
 //! [`EditorState`] method in [`crate::layer_ops`].
@@ -13,6 +14,7 @@ use gpui::{
 };
 use rp_doc::{BlendMode, Layer, LayerId, LayerKind};
 
+use crate::insert_flow::prompt_insert_image;
 use crate::layer_ops::OPACITY_STEP;
 use crate::state::EditorState;
 use crate::view::{
@@ -337,6 +339,13 @@ impl LayersPanel {
                     .flex_1()
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.edit(cx, |s| s.add_paint_layer());
+                    })),
+            )
+            .child(
+                button("layer-image", "Image")
+                    .flex_1()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        prompt_insert_image(&this.state, cx);
                     })),
             )
             .child(

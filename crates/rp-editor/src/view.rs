@@ -2,8 +2,8 @@
 //! status bar. Thin: every decision goes through [`EditorState`].
 
 use gpui::{
-    App, Context, Div, Entity, FocusHandle, KeyBinding, KeyDownEvent, KeyUpEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Rgba, ScrollDelta,
+    App, Context, Div, Entity, ExternalPaths, FocusHandle, KeyBinding, KeyDownEvent, KeyUpEvent,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Rgba, ScrollDelta,
     ScrollWheelEvent, SharedString, Stateful, Window, actions, canvas, div, point, prelude::*, px,
     rgb,
 };
@@ -12,6 +12,7 @@ use rp_palette_dither::Rgb;
 
 use crate::canvas_view::{self, CanvasCache};
 use crate::filter_panel::FilterPanel;
+use crate::insert_flow::{insert_image_files, prompt_insert_image};
 use crate::layers_panel::LayersPanel;
 use crate::paint_ops::{BrushTip, MAX_BRUSH_SIZE, MIN_BRUSH_SIZE, PaintButton};
 use crate::render_worker::{
@@ -23,7 +24,16 @@ use crate::viewport::Vec2;
 actions!(
     retro_paint,
     [
-        NewFile, OpenFile, SaveFile, SaveFileAs, ExportPng, Quit, ZoomIn, ZoomOut, ActualSize,
+        NewFile,
+        OpenFile,
+        InsertImage,
+        SaveFile,
+        SaveFileAs,
+        ExportPng,
+        Quit,
+        ZoomIn,
+        ZoomOut,
+        ActualSize,
         FitCanvas
     ]
 );
@@ -35,6 +45,7 @@ pub fn bind_keys(cx: &mut App) {
         match cmd {
             FileCommand::New => KeyBinding::new(k, NewFile, None),
             FileCommand::Open => KeyBinding::new(k, OpenFile, None),
+            FileCommand::InsertImage => KeyBinding::new(k, InsertImage, None),
             FileCommand::Save => KeyBinding::new(k, SaveFile, None),
             FileCommand::SaveAs => KeyBinding::new(k, SaveFileAs, None),
             FileCommand::ExportPng => KeyBinding::new(k, ExportPng, None),
@@ -63,6 +74,8 @@ pub(crate) const ACCENT: u32 = 0x3d7fd9;
 pub(crate) const BORDER: u32 = 0x111111;
 pub(crate) const TEXT: u32 = 0xdcdcdc;
 pub(crate) const TEXT_DIM: u32 = 0x8a8a8a;
+/// Canvas-area background while files are dragged over it.
+const DROP_HIGHLIGHT: u32 = 0x2a3f5c;
 
 const MENU_BAR_H: f32 = 26.;
 const RIBBON_H: f32 = 44.;
@@ -192,6 +205,7 @@ impl EditorView {
     fn run(&mut self, cmd: FileCommand, _window: &mut Window, cx: &mut Context<Self>) {
         match self.edit(cx, |s| s.dispatch(cmd)) {
             Outcome::Quit => cx.quit(),
+            Outcome::PickImages => prompt_insert_image(&self.state, cx),
             Outcome::Done | Outcome::NotImplemented(_) => {}
         }
     }
@@ -202,6 +216,9 @@ impl EditorView {
     }
     fn on_open(&mut self, _: &OpenFile, w: &mut Window, cx: &mut Context<Self>) {
         self.run(FileCommand::Open, w, cx);
+    }
+    fn on_insert_image(&mut self, _: &InsertImage, w: &mut Window, cx: &mut Context<Self>) {
+        self.run(FileCommand::InsertImage, w, cx);
     }
     fn on_save(&mut self, _: &SaveFile, w: &mut Window, cx: &mut Context<Self>) {
         self.run(FileCommand::Save, w, cx);
@@ -418,6 +435,11 @@ impl EditorView {
             .overflow_hidden()
             .bg(rgb(canvas_view::SURROUND))
             .child(surface)
+            // Files dropped from a file manager become image layers.
+            .drag_over::<ExternalPaths>(|style, _, _, _| style.bg(rgb(DROP_HIGHLIGHT)))
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
+                insert_image_files(&this.state, paths.paths().to_vec(), cx);
+            }))
             .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _, cx| {
                 let p = this.local(ev.position);
                 let pick = match ev.pressed_button {
@@ -692,6 +714,7 @@ impl Render for EditorView {
             .track_focus(&self.focus)
             .on_action(cx.listener(Self::on_new))
             .on_action(cx.listener(Self::on_open))
+            .on_action(cx.listener(Self::on_insert_image))
             .on_action(cx.listener(Self::on_save))
             .on_action(cx.listener(Self::on_save_as))
             .on_action(cx.listener(Self::on_export_png))

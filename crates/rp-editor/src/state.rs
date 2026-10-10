@@ -24,6 +24,7 @@ pub const BACKGROUND_LAYER: &str = "Background";
 pub enum FileCommand {
     New,
     Open,
+    InsertImage,
     Save,
     SaveAs,
     ExportPng,
@@ -32,9 +33,10 @@ pub enum FileCommand {
 
 impl FileCommand {
     /// Every command, in File-menu order.
-    pub const ALL: [FileCommand; 6] = [
+    pub const ALL: [FileCommand; 7] = [
         FileCommand::New,
         FileCommand::Open,
+        FileCommand::InsertImage,
         FileCommand::Save,
         FileCommand::SaveAs,
         FileCommand::ExportPng,
@@ -46,6 +48,7 @@ impl FileCommand {
         match self {
             FileCommand::New => "New",
             FileCommand::Open => "Open…",
+            FileCommand::InsertImage => "Insert Image…",
             FileCommand::Save => "Save",
             FileCommand::SaveAs => "Save As…",
             FileCommand::ExportPng => "Export PNG…",
@@ -58,6 +61,7 @@ impl FileCommand {
         match self {
             FileCommand::New => "ctrl-n",
             FileCommand::Open => "ctrl-o",
+            FileCommand::InsertImage => "ctrl-i",
             FileCommand::Save => "ctrl-s",
             FileCommand::SaveAs => "ctrl-shift-s",
             FileCommand::ExportPng => "ctrl-e",
@@ -69,7 +73,10 @@ impl FileCommand {
     pub const fn separator_after(self) -> bool {
         matches!(
             self,
-            FileCommand::Open | FileCommand::SaveAs | FileCommand::ExportPng
+            FileCommand::Open
+                | FileCommand::InsertImage
+                | FileCommand::SaveAs
+                | FileCommand::ExportPng
         )
     }
 }
@@ -139,6 +146,8 @@ pub enum Outcome {
     Quit,
     /// Not wired yet (the `file-ops` feature implements it).
     NotImplemented(FileCommand),
+    /// Ask the user for image files to insert (Insert Image…).
+    PickImages,
 }
 
 /// Everything the editor knows, independent of GPUI.
@@ -325,6 +334,7 @@ impl EditorState {
                 Outcome::Done
             }
             FileCommand::Quit => Outcome::Quit,
+            FileCommand::InsertImage => Outcome::PickImages,
             FileCommand::Open
             | FileCommand::Save
             | FileCommand::SaveAs
@@ -400,6 +410,19 @@ mod tests {
     }
 
     #[test]
+    fn insert_image_asks_for_files_and_leaves_document_alone() {
+        let mut st = EditorState::new();
+        let before = st.document.clone();
+        let v = st.doc_version;
+        st.file_menu_open = true;
+        assert_eq!(st.dispatch(FileCommand::InsertImage), Outcome::PickImages);
+        assert_eq!(st.document, before);
+        assert_eq!(st.doc_version, v);
+        assert!(!st.file_menu_open);
+        assert_eq!(FileCommand::InsertImage.label(), "Insert Image…");
+    }
+
+    #[test]
     fn quit_returns_quit() {
         let mut st = EditorState::new();
         assert_eq!(st.dispatch(FileCommand::Quit), Outcome::Quit);
@@ -456,6 +479,7 @@ mod tests {
             [
                 "ctrl-n",
                 "ctrl-o",
+                "ctrl-i",
                 "ctrl-s",
                 "ctrl-shift-s",
                 "ctrl-e",
