@@ -14,6 +14,7 @@ use std::sync::Arc;
 use gpui::{Bounds, Corners, Pixels, RenderImage, Window, fill, point, px, rgb, size};
 
 use crate::canvas_image::{CHECKER, SharpTile, checkerboard_bgra, plan_sharp_tile, upscale_tile};
+use crate::paint_ops::FrameView;
 use crate::render_worker::CanvasFrame;
 use crate::viewport::{Vec2, Viewport};
 
@@ -61,6 +62,16 @@ impl CanvasCache {
     #[cfg(test)]
     pub(crate) fn version(&self) -> Option<u64> {
         self.version
+    }
+
+    /// The displayed flattened document, for the Picker.
+    pub(crate) fn frame_view(&self) -> Option<FrameView<'_>> {
+        let full = self.full.as_ref()?;
+        Some(FrameView {
+            width: self.width,
+            height: self.height,
+            bgra: full.as_bytes(0)?,
+        })
     }
 
     /// Takes a flattened document from the render worker. Frames not newer
@@ -211,6 +222,9 @@ mod tests {
         assert!(cache.accept(frame(2, 8, 8, [1, 2, 3, 255])));
         let p = cache.prepare(&vp, area(), 1.0);
         assert_eq!(pixel(&p.image.unwrap().0), [1, 2, 3, 255]);
+        // The Picker sees the same frame, as RGBA.
+        let f = cache.frame_view().unwrap();
+        assert_eq!(f.sample(Vec2::new(7.5, 7.5)), Some([3, 2, 1, 255]));
 
         assert!(!cache.accept(frame(1, 8, 8, [9, 9, 9, 255])), "older");
         assert!(

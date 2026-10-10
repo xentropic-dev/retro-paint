@@ -17,6 +17,7 @@ pub mod filter_ops;
 mod filter_panel;
 pub mod layer_ops;
 mod layers_panel;
+pub mod paint_ops;
 pub mod render_worker;
 pub mod state;
 mod view;

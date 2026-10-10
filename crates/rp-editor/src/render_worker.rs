@@ -33,15 +33,12 @@ use rp_doc::{Document, FrameMsg, IndexedFrame, Layout, OutputPoint, Size, Source
 use rp_palette_dither::{CgaColor, Palette, Renderer, Rgb};
 
 use crate::canvas_image::rgba_into_bgra;
+use crate::paint_ops::brush_output_diameter;
 use crate::state::EditorState;
 use crate::viewport::Vec2;
 
 /// Receives each frame for the DOS view, on the worker thread.
 pub type FrameSink = Box<dyn FnMut(FrameMsg) + Send>;
-
-/// Brush diameter (output pixels) sent to the DOS view until the paint tool
-/// adds a real brush size.
-pub const DEFAULT_BRUSH_DIAMETER: u32 = 3;
 
 /// Environment variable: when set, the worker prints per-frame timings
 /// (request → frame sent) to stderr, and the editor prints when each canvas
@@ -199,6 +196,7 @@ pub struct Overlay {
     pub layout: Layout,
     pub cursor: Option<OutputPoint>,
     pub tool: Tool,
+    /// Brush size in output pixels (see [`brush_output_diameter`]).
     pub brush_diameter: u32,
     /// Full-color foreground; the worker maps it to [`FrameMsg::active_color`].
     pub fg: Rgb,
@@ -216,7 +214,11 @@ impl Overlay {
                 .cursor_canvas
                 .and_then(|c| cursor_to_output(doc.canvas_size, doc.output_size, c)),
             tool: state.tool,
-            brush_diameter: DEFAULT_BRUSH_DIAMETER,
+            brush_diameter: brush_output_diameter(
+                state.brush.size(),
+                doc.canvas_size,
+                doc.output_size,
+            ),
             fg: doc.fg,
             palette: doc.dither.palette.palette(),
         }
@@ -526,7 +528,7 @@ mod tests {
             layout: Layout::Mobile,
             cursor: None,
             tool: Tool::Brush,
-            brush_diameter: DEFAULT_BRUSH_DIAMETER,
+            brush_diameter: 3,
             fg: Rgb::new(0, 0, 0),
             palette: Palette::full(),
         }
@@ -630,6 +632,23 @@ mod tests {
         );
         st.cursor_canvas = Some(Vec2::new(-5.0, 641.0));
         assert_eq!(Overlay::from_state(&st).cursor, None);
+    }
+
+    #[test]
+    fn overlay_brush_diameter_follows_brush_size_in_output_pixels() {
+        let mut st = EditorState::new();
+        // 800x1280 canvas -> 200x320 output: a quarter.
+        st.set_brush_size(40);
+        let o = Overlay::from_state(&st);
+        assert_eq!(o.brush_diameter, 10);
+        st.set_brush_size(2);
+        let o2 = Overlay::from_state(&st);
+        assert_eq!(o2.brush_diameter, 1);
+        // A size change alone is an overlay update, not a re-render.
+        assert_eq!(
+            next_request(Some((st.doc_version, o)), st.doc_version, &o2),
+            Request::Overlay
+        );
     }
 
     #[test]
@@ -882,5 +901,33 @@ mod tests {
             core.render(&job);
         }
         eprintln!("flatten + dither (worker): {:?}", t.elapsed() / n);
+
+        // One paint event as the UI thread runs it: a mouse move that lays
+        // dabs (brush size 40, ~30 px of travel) plus the snapshot the view
+        // then hands the worker.
+        let top = st.document.layers().last().unwrap().id();
+        st.select_layer(top);
+        st.set_brush_size(40);
+        st.begin_stroke(
+            Vec2::new(100.0, 100.0),
+            crate::paint_ops::PaintButton::Primary,
+        );
+        let mut x = 100.0;
+        let (mut stroke, mut snap) = (std::time::Duration::ZERO, std::time::Duration::ZERO);
+        for _ in 0..n {
+            x += 30.0;
+            let t = Instant::now();
+            st.continue_stroke(Vec2::new(x, 100.0 + x / 4.0));
+            stroke += t.elapsed();
+            let t = Instant::now();
+            std::hint::black_box(RenderJob::from_state(&st));
+            snap += t.elapsed();
+        }
+        eprintln!(
+            "paint event (UI thread): stroke {:?} + snapshot {:?} = {:?}",
+            stroke / n,
+            snap / n,
+            (stroke + snap) / n
+        );
     }
 }

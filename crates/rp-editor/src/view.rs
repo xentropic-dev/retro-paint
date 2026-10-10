@@ -13,6 +13,7 @@ use rp_palette_dither::Rgb;
 use crate::canvas_view::{self, CanvasCache};
 use crate::filter_panel::FilterPanel;
 use crate::layers_panel::LayersPanel;
+use crate::paint_ops::{BrushTip, MAX_BRUSH_SIZE, MIN_BRUSH_SIZE, PaintButton};
 use crate::render_worker::{
     CanvasReceiver, Overlay, RenderJob, Request, TIMING_ENV, WorkerClient, next_request,
 };
@@ -287,6 +288,7 @@ impl EditorView {
     }
 
     fn ribbon(&self, cx: &mut Context<Self>) -> Div {
+        let brush_controls = self.brush_controls(cx);
         let state = self.state.read(cx);
         let doc = &state.document;
         let mut tools = div().flex().flex_row().gap_1();
@@ -307,7 +309,15 @@ impl EditorView {
             .bg(rgb(BG_RIBBON))
             .border_b_1()
             .border_color(rgb(BORDER))
-            .child(tools)
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_4()
+                    .child(tools)
+                    .child(brush_controls),
+            )
             .child(
                 div()
                     .relative()
@@ -316,6 +326,55 @@ impl EditorView {
                     .child(color_chip(doc.bg).absolute().right_0().bottom_0())
                     .child(color_chip(doc.fg).absolute().left_0().top_0()),
             )
+    }
+
+    /// Brush size stepper (`[` / `]`) and the Hard/Soft tip toggle.
+    fn brush_controls(&self, cx: &mut Context<Self>) -> Div {
+        let brush = &self.state.read(cx).brush;
+        let (size, tip) = (brush.size(), brush.tip());
+        let mut tips = div().flex().flex_row().gap_1();
+        for t in [BrushTip::Hard, BrushTip::Soft] {
+            tips = tips.child(
+                ribbon_button(
+                    SharedString::from(format!("tip-{t:?}")),
+                    t.label(),
+                    tip == t,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.edit(cx, |s| s.set_brush_tip(t));
+                })),
+            );
+        }
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_1()
+            .text_sm()
+            .child(div().text_color(rgb(TEXT_DIM)).child("Size"))
+            .child(
+                ribbon_button("size-down".into(), "−", false)
+                    .when(size <= MIN_BRUSH_SIZE, |d| d.text_color(rgb(TEXT_DIM)))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.edit(cx, |s| s.brush_size_down());
+                    })),
+            )
+            .child(
+                div()
+                    .id("brush-size")
+                    .w(px(52.))
+                    .flex()
+                    .justify_center()
+                    .child(format!("{size} px")),
+            )
+            .child(
+                ribbon_button("size-up".into(), "+", false)
+                    .when(size >= MAX_BRUSH_SIZE, |d| d.text_color(rgb(TEXT_DIM)))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.edit(cx, |s| s.brush_size_up());
+                    })),
+            )
+            .child(tips)
     }
 
     /// The canvas area: draws the flattened document and turns pointer input
@@ -361,7 +420,21 @@ impl EditorView {
             .child(surface)
             .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _, cx| {
                 let p = this.local(ev.position);
-                this.edit(cx, |s| s.pointer_moved(p));
+                let pick = match ev.pressed_button {
+                    Some(MouseButton::Left) => Some(PaintButton::Primary),
+                    Some(MouseButton::Right) => Some(PaintButton::Secondary),
+                    _ => None,
+                };
+                let frame = this.canvas_cache.frame_view();
+                this.state.update(cx, |s, cx| {
+                    s.pointer_moved(p);
+                    if let (Some(button), Some(c), Tool::Picker) = (pick, s.cursor_canvas, s.tool)
+                        && s.pan_drag.is_none()
+                    {
+                        s.pick_color(frame, c, button);
+                    }
+                    cx.notify();
+                });
             }))
             .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                 if !*hovered && this.state.read(cx).pan_drag.is_none() {
@@ -378,16 +451,29 @@ impl EditorView {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, ev: &MouseDownEvent, _, cx| {
+                    let p = this.local(ev.position);
                     if this.state.read(cx).space_held {
-                        let p = this.local(ev.position);
                         this.edit(cx, |s| s.begin_pan(p));
+                    } else {
+                        this.press(p, PaintButton::Primary, cx);
                     }
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, ev: &MouseDownEvent, _, cx| {
+                    let p = this.local(ev.position);
+                    this.press(p, PaintButton::Secondary, cx);
                 }),
             )
             .on_mouse_up(MouseButton::Middle, cx.listener(Self::on_pan_end))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_pan_end))
             .on_mouse_up_out(MouseButton::Middle, cx.listener(Self::on_pan_end))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_pan_end))
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::on_paint_end))
+            .on_mouse_up(MouseButton::Right, cx.listener(Self::on_paint_end))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_paint_end))
+            .on_mouse_up_out(MouseButton::Right, cx.listener(Self::on_paint_end))
             .on_scroll_wheel(cx.listener(|this, ev: &ScrollWheelEvent, _, cx| {
                 let (d, lines) = match ev.delta {
                     ScrollDelta::Pixels(p) => ((f32::from(p.x), f32::from(p.y)), false),
@@ -415,6 +501,28 @@ impl EditorView {
         self.view_cmd(ViewCommand::Fit, cx);
     }
 
+    /// A paint button went down at canvas-area point `p`: start a stroke
+    /// (Brush, Eraser) or pick a color (Picker).
+    fn press(&mut self, p: Vec2, button: PaintButton, cx: &mut Context<Self>) {
+        let frame = self.canvas_cache.frame_view();
+        self.state.update(cx, |s, cx| {
+            s.pointer_moved(p);
+            let Some(c) = s.cursor_canvas else { return };
+            if s.tool_paints() {
+                s.begin_stroke(c, button);
+            } else if s.tool == Tool::Picker {
+                s.pick_color(frame, c, button);
+            }
+            cx.notify();
+        });
+    }
+
+    fn on_paint_end(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.state.read(cx).stroke.is_some() {
+            self.edit(cx, |s| s.end_stroke());
+        }
+    }
+
     fn on_pan_end(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
         if self.state.read(cx).pan_drag.is_some() {
             self.edit(cx, |s| s.end_pan());
@@ -422,8 +530,16 @@ impl EditorView {
     }
 
     fn on_key_down(&mut self, ev: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if ev.keystroke.key == "space" && !self.state.read(cx).space_held {
-            self.edit(cx, |s| s.space_held = true);
+        let k = &ev.keystroke;
+        let m = &k.modifiers;
+        let plain = !(m.control || m.alt || m.platform || m.function);
+        match k.key.as_str() {
+            "space" if !self.state.read(cx).space_held => {
+                self.edit(cx, |s| s.space_held = true);
+            }
+            "[" if plain => self.edit(cx, |s| s.brush_size_down()),
+            "]" if plain => self.edit(cx, |s| s.brush_size_up()),
+            _ => {}
         }
     }
 
@@ -498,8 +614,16 @@ impl EditorView {
 }
 
 fn tool_button(tool: Tool, selected: bool) -> Stateful<Div> {
+    ribbon_button(
+        SharedString::from(format!("tool-{tool:?}")),
+        tool_label(tool),
+        selected,
+    )
+}
+
+fn ribbon_button(id: SharedString, label: &'static str, selected: bool) -> Stateful<Div> {
     div()
-        .id(SharedString::from(format!("tool-{tool:?}")))
+        .id(id)
         .px_3()
         .py_1()
         .rounded_sm()
@@ -514,7 +638,7 @@ fn tool_button(tool: Tool, selected: bool) -> Stateful<Div> {
         .when(!selected, |d| {
             d.border_color(rgb(0x404040)).hover(|s| s.bg(rgb(BG_HOVER)))
         })
-        .child(tool_label(tool))
+        .child(label)
 }
 
 fn color_chip(c: Rgb) -> Div {
