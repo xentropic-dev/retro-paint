@@ -4,7 +4,7 @@
 //! current editor state; the DOS thread draws it and never sends anything
 //! back. See docs/tech-stack.md, "Data flow between views".
 
-use rp_palette_dither::{CgaColor, Palette};
+use rp_palette_dither::{CgaColor, IndexedImage, Palette};
 
 use crate::document::Layout;
 use crate::raster::Size;
@@ -79,6 +79,17 @@ impl IndexedFrame {
     }
 }
 
+/// Takes the pipeline's output as is: the pixel buffer is moved, not copied.
+impl From<IndexedImage> for IndexedFrame {
+    fn from(img: IndexedImage) -> Self {
+        Self {
+            size: Size::new(img.width, img.height),
+            pixels: img.pixels,
+            palette: img.palette,
+        }
+    }
+}
+
 /// One frame for the DOS view.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct FrameMsg {
@@ -150,6 +161,35 @@ mod tests {
         assert_eq!(f.get(0, 0), Some(CgaColor::Blue));
         assert_eq!(f.get(3, 0), None);
         assert_eq!(f.get(0, -1), None);
+    }
+
+    #[test]
+    fn indexed_image_converts_without_copy() {
+        use rp_palette_dither::{FourColor, Intensity, Preset};
+        let palette = FourColor::new(Preset::Palette1, Intensity::High).palette();
+        let pixels = vec![
+            CgaColor::Black,
+            CgaColor::LightCyan,
+            CgaColor::LightMagenta,
+            CgaColor::White,
+            CgaColor::Black,
+            CgaColor::White,
+        ];
+        let expected = pixels.clone();
+        let ptr = pixels.as_ptr();
+        let img = IndexedImage {
+            width: 3,
+            height: 2,
+            pixels,
+            palette,
+        };
+        let f = IndexedFrame::from(img);
+        assert_eq!(f.size, Size::new(3, 2));
+        assert_eq!(f.pixels, expected);
+        assert_eq!(f.pixels.as_ptr(), ptr, "pixel buffer was copied");
+        assert_eq!(f.palette, palette);
+        assert_eq!(f.get(1, 0), Some(CgaColor::LightCyan));
+        assert_eq!(f.get(2, 1), Some(CgaColor::White));
     }
 
     #[test]

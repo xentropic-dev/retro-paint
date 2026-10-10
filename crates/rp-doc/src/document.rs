@@ -1,7 +1,7 @@
-//! The document: sizes, layout, filter palette, colors, swatches, and the
+//! The document: sizes, layout, dither settings, colors, swatches, and the
 //! layer stack.
 
-use rp_palette_dither::{FourColor, Palette, Rgb};
+use rp_palette_dither::{DitherSettings, Rgb};
 
 use crate::layer::{Layer, LayerId};
 use crate::raster::Size;
@@ -26,37 +26,9 @@ impl Layout {
     }
 }
 
-/// Which colors the dither may output, as the user chose them. Kept as the
-/// user's choice (not just the resulting [`Palette`]) so the filter panel and
-/// project file can show and restore it.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
-pub enum PaletteChoice {
-    /// All 16 CGA colors.
-    #[default]
-    Full,
-    /// An authentic 4-color mode with its background color.
-    FourColor(FourColor),
-    /// A user-picked subset.
-    Custom(Palette),
-}
-
-impl PaletteChoice {
-    /// The palette the dither should use.
-    pub fn palette(&self) -> Palette {
-        match *self {
-            PaletteChoice::Full => Palette::full(),
-            PaletteChoice::FourColor(m) => m.palette(),
-            PaletteChoice::Custom(p) => p,
-        }
-    }
-}
-
 /// A retro-paint project.
 ///
 /// The layer stack is ordered **bottom to top**: index 0 is drawn first.
-/// Dither method, strength and pre-adjust settings belong to the pipeline's
-/// `DitherSettings` and will join this struct with that feature; for now only
-/// the palette choice is stored.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Document {
     /// Full-color working image size. Paint layers are this size.
@@ -64,7 +36,9 @@ pub struct Document {
     /// Size of the dithered output (DOS canvas window, PNG export).
     pub output_size: Size,
     pub layout: Layout,
-    pub palette: PaletteChoice,
+    /// Filter settings: dither method, palette choice, pre-adjust, Bayer
+    /// spread, strength, serpentine. Saved with the project.
+    pub dither: DitherSettings,
     /// Foreground brush color.
     pub fg: Rgb,
     /// Background brush color.
@@ -77,7 +51,8 @@ pub struct Document {
 
 impl Document {
     /// An empty document: no layers, output at a quarter of the canvas size
-    /// (at least 1×1), mobile layout, full palette, black on white.
+    /// (at least 1×1), mobile layout, default dither settings (Floyd–Steinberg, full palette,
+    /// neutral pre-adjust), black on white.
     pub fn new(canvas_size: Size) -> Self {
         Self {
             canvas_size,
@@ -86,7 +61,7 @@ impl Document {
                 (canvas_size.height / 4).max(1),
             ),
             layout: Layout::default(),
-            palette: PaletteChoice::default(),
+            dither: DitherSettings::default(),
             fg: Rgb::new(0, 0, 0),
             bg: Rgb::new(255, 255, 255),
             swatches: Vec::new(),
@@ -157,7 +132,7 @@ impl Document {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rp_palette_dither::{CgaColor, Intensity, Preset};
+    use rp_palette_dither::{DitherMethod, Palette};
 
     fn names(d: &Document) -> Vec<&str> {
         d.layers().iter().map(|l| l.name.as_str()).collect()
@@ -168,7 +143,10 @@ mod tests {
         let d = Document::new(Size::new(800, 1280));
         assert_eq!(d.output_size, Size::new(200, 320));
         assert_eq!(d.layout, Layout::Mobile);
-        assert_eq!(d.palette.palette(), Palette::full());
+        assert_eq!(d.dither, DitherSettings::default());
+        assert_eq!(d.dither.method, DitherMethod::FloydSteinberg);
+        assert_eq!(d.dither.palette.palette(), Palette::full());
+        assert!(d.dither.adjust.is_neutral());
         assert!(d.layers().is_empty());
         assert_eq!(Document::new(Size::new(3, 3)).output_size, Size::new(1, 1));
     }
@@ -177,14 +155,6 @@ mod tests {
     fn dos_screen_sizes() {
         assert_eq!(Layout::Mobile.dos_screen(), Size::new(200, 320));
         assert_eq!(Layout::Desktop.dos_screen(), Size::new(320, 200));
-    }
-
-    #[test]
-    fn palette_choice_resolves() {
-        let m = FourColor::new(Preset::Mode5, Intensity::High).with_background(CgaColor::Blue);
-        assert_eq!(PaletteChoice::FourColor(m).palette(), m.palette());
-        let custom = Palette::new([CgaColor::White, CgaColor::Black]).unwrap();
-        assert_eq!(PaletteChoice::Custom(custom).palette(), custom);
     }
 
     #[test]
