@@ -363,7 +363,7 @@ impl LayersPanel {
     }
 }
 
-fn button(id: &'static str, label: &'static str) -> Stateful<Div> {
+pub(crate) fn button(id: &'static str, label: &'static str) -> Stateful<Div> {
     div()
         .id(id)
         .px_2()
@@ -379,7 +379,7 @@ fn button(id: &'static str, label: &'static str) -> Stateful<Div> {
         .child(label)
 }
 
-fn toggle(id: String, label: &'static str, on: bool) -> Stateful<Div> {
+pub(crate) fn toggle(id: String, label: &'static str, on: bool) -> Stateful<Div> {
     div()
         .id(SharedString::from(id))
         .px_1()

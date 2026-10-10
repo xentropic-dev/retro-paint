@@ -12,6 +12,7 @@ use rp_palette_dither::Rgb;
 
 use crate::FrameSink;
 use crate::canvas_view::{self, CanvasCache};
+use crate::filter_panel::FilterPanel;
 use crate::layers_panel::LayersPanel;
 use crate::state::{EditorState, FileCommand, Outcome, ViewCommand, shortcut_label, tool_label};
 use crate::viewport::Vec2;
@@ -65,6 +66,8 @@ const RIBBON_H: f32 = 44.;
 const PANEL_W: f32 = 260.;
 /// The Layers panel keeps at least this height; Filter and Swatches give way.
 const LAYERS_MIN_H: f32 = 260.;
+/// Filter panel height when the window has room for it.
+const FILTER_H: f32 = 340.;
 
 /// Runs `f` on the shared state and notifies its observers (every view that
 /// shows it). The single path for mutating [`EditorState`] from a view.
@@ -84,6 +87,7 @@ pub(crate) struct EditorView {
     /// Shared with the panel views.
     pub(crate) state: Entity<EditorState>,
     layers_panel: Entity<LayersPanel>,
+    filter_panel: Entity<FilterPanel>,
     focus: FocusHandle,
     pub(crate) tick: u32,
     sink: FrameSink,
@@ -99,9 +103,11 @@ impl EditorView {
         let state = cx.new(|_| EditorState::new());
         cx.observe(&state, |_, _, cx| cx.notify()).detach();
         let layers_panel = cx.new(|cx| LayersPanel::new(state.clone(), window, cx));
+        let filter_panel = cx.new(|cx| FilterPanel::new(state.clone(), cx));
         Self {
             state,
             layers_panel,
+            filter_panel,
             focus,
             tick: 0,
             sink,
@@ -388,7 +394,7 @@ impl EditorView {
             .border_l_1()
             .border_color(rgb(BORDER))
             .overflow_hidden()
-            // In short windows the placeholder panels shrink first.
+            // In short windows Filter (which scrolls) and Swatches shrink.
             .child(
                 div()
                     .flex_1()
@@ -397,13 +403,18 @@ impl EditorView {
                     .child(self.layers_panel.clone()),
             )
             .child(
-                panel("Filter", "Dither settings".into())
-                    .h(px(220.))
-                    .overflow_hidden(),
+                div()
+                    .h(px(FILTER_H))
+                    .min_h(px(120.))
+                    .border_b_1()
+                    .border_color(rgb(BORDER))
+                    .overflow_hidden()
+                    .child(self.filter_panel.clone()),
             )
             .child(
                 panel("Swatches", "No swatches".into())
-                    .h(px(140.))
+                    .h(px(110.))
+                    .min_h(px(40.))
                     .overflow_hidden(),
             )
     }

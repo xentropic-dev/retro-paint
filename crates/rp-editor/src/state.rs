@@ -6,6 +6,7 @@
 
 use rp_doc::{Document, Layer, LayerId, LayerKind, RgbaImage, Size, SourceStore, Tool};
 
+use crate::filter_ops::PaletteMemory;
 use crate::layer_ops::RenameEdit;
 use crate::viewport::{Vec2, Viewport};
 
@@ -170,6 +171,8 @@ pub struct EditorState {
     pub selected_layer: Option<LayerId>,
     /// Inline rename in progress in the Layers panel.
     pub renaming: Option<RenameEdit>,
+    /// Filter panel: parameters of the palette modes not currently selected.
+    pub palette_memory: PaletteMemory,
 }
 
 impl Default for EditorState {
@@ -198,6 +201,7 @@ impl EditorState {
             space_held: false,
             selected_layer,
             renaming: None,
+            palette_memory: PaletteMemory::default(),
         }
     }
 
@@ -207,6 +211,7 @@ impl EditorState {
         let s = document.canvas_size;
         self.selected_layer = document.layers().last().map(Layer::id);
         self.renaming = None;
+        self.palette_memory = PaletteMemory::default();
         self.document = document;
         self.viewport.set_canvas_size(s.width, s.height);
         self.auto_fit = true;
