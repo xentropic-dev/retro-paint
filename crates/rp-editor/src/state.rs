@@ -95,6 +95,36 @@ pub const fn tool_label(tool: Tool) -> &'static str {
     }
 }
 
+/// A zoom command with a key binding (no menu yet).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum ViewCommand {
+    ZoomIn,
+    ZoomOut,
+    /// 100%.
+    ActualSize,
+    /// Fit the whole canvas in the view.
+    Fit,
+}
+
+impl ViewCommand {
+    pub const ALL: [ViewCommand; 4] = [
+        ViewCommand::ZoomIn,
+        ViewCommand::ZoomOut,
+        ViewCommand::ActualSize,
+        ViewCommand::Fit,
+    ];
+
+    /// GPUI keystroke strings bound to the command.
+    pub const fn keystrokes(self) -> &'static [&'static str] {
+        match self {
+            ViewCommand::ZoomIn => &["ctrl-=", "ctrl-+", "ctrl-shift-="],
+            ViewCommand::ZoomOut => &["ctrl--"],
+            ViewCommand::ActualSize => &["ctrl-1"],
+            ViewCommand::Fit => &["ctrl-0"],
+        }
+    }
+}
+
 /// What the view must do after a command.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Outcome {
@@ -122,9 +152,10 @@ pub struct EditorState {
     pub doc_version: u64,
     /// Zoom and scroll of the canvas area.
     pub viewport: Viewport,
-    /// Set when the viewport should fit the canvas on the next layout
-    /// (startup and after New).
-    pub needs_fit: bool,
+    /// While set, the viewport refits the canvas whenever the canvas area is
+    /// resized. Set on startup, after New and by Fit; cleared as soon as the
+    /// user pans or zooms.
+    pub auto_fit: bool,
     /// Pointer position in canvas coordinates while it is over the canvas
     /// area (may lie outside the canvas itself). The render worker forwards
     /// it to the DOS view.
@@ -155,7 +186,7 @@ impl EditorState {
             sources: SourceStore::new(),
             doc_version: 0,
             viewport: Viewport::new(s.width, s.height),
-            needs_fit: true,
+            auto_fit: true,
             cursor_canvas: None,
             pan_drag: None,
             space_held: false,
@@ -167,7 +198,8 @@ impl EditorState {
         let s = document.canvas_size;
         self.document = document;
         self.viewport.set_canvas_size(s.width, s.height);
-        self.needs_fit = true;
+        self.auto_fit = true;
+        self.viewport.fit();
         self.mark_document_changed();
     }
 
@@ -182,13 +214,24 @@ impl EditorState {
         self.document.flatten(&self.sources)
     }
 
-    /// Records the canvas area's size; fits the canvas if a fit is pending.
+    /// Records the canvas area's size; refits while [`EditorState::auto_fit`].
     pub fn set_view_size(&mut self, width: f32, height: f32) {
+        let changed = self.viewport.view_size() != Vec2::new(width, height);
         self.viewport.set_view_size(width, height);
-        if self.needs_fit && width > 0.0 && height > 0.0 {
+        if self.auto_fit && changed && width > 0.0 && height > 0.0 {
             self.viewport.fit();
-            self.needs_fit = false;
         }
+    }
+
+    /// Runs a View-menu / zoom shortcut command.
+    pub fn view_command(&mut self, cmd: ViewCommand) {
+        match cmd {
+            ViewCommand::ZoomIn => self.viewport.zoom_in_centered(),
+            ViewCommand::ZoomOut => self.viewport.zoom_out_centered(),
+            ViewCommand::ActualSize => self.viewport.actual_size(),
+            ViewCommand::Fit => self.viewport.fit(),
+        }
+        self.auto_fit = cmd == ViewCommand::Fit;
     }
 
     /// Pointer moved to `screen` (canvas-area coordinates). Pans if a pan
@@ -209,6 +252,7 @@ impl EditorState {
     /// Starts a pan drag at `screen`.
     pub fn begin_pan(&mut self, screen: Vec2) {
         self.pan_drag = Some(screen);
+        self.auto_fit = false;
     }
 
     pub fn end_pan(&mut self) {
@@ -218,6 +262,7 @@ impl EditorState {
     /// Scroll wheel over the canvas at `screen`: pans, or zooms about the
     /// pointer with ctrl held. Keeps the cursor's canvas position current.
     pub fn wheel(&mut self, screen: Vec2, dx: f32, dy: f32, lines: bool, ctrl: bool) {
+        self.auto_fit = false;
         if ctrl {
             self.viewport.scroll_zoom(dy, lines, screen);
         } else {
@@ -408,13 +453,12 @@ mod tests {
     fn new_bumps_doc_version_and_refits() {
         let mut st = EditorState::new();
         st.set_view_size(1000.0, 700.0);
-        assert!(!st.needs_fit);
-        st.viewport.zoom_about(8.0, Vec2::new(10.0, 10.0));
+        st.wheel(Vec2::new(10.0, 10.0), 0.0, 3.0, true, true);
+        assert!(!st.auto_fit);
         let v = st.doc_version;
         st.dispatch(FileCommand::New);
         assert_ne!(st.doc_version, v);
-        assert!(st.needs_fit);
-        st.set_view_size(1000.0, 700.0);
+        assert!(st.auto_fit);
         assert_eq!(st.viewport.zoom(), st.viewport.fit_zoom());
     }
 
@@ -427,16 +471,45 @@ mod tests {
     }
 
     #[test]
-    fn fits_on_first_layout_only() {
+    fn refits_on_resize_until_the_user_navigates() {
         let mut st = EditorState::new();
         st.set_view_size(0.0, 0.0);
-        assert!(st.needs_fit);
+        assert!(st.auto_fit);
         st.set_view_size(1000.0, 700.0);
         let z = st.viewport.zoom();
         assert!((z - (700.0 - 48.0) / 1280.0).abs() < 1e-6);
-        st.viewport.zoom_about(2.0, Vec2::new(500.0, 350.0));
+        st.set_view_size(1000.0, 500.0);
+        assert!((st.viewport.zoom() - (500.0 - 48.0) / 1280.0).abs() < 1e-6);
+        st.begin_pan(Vec2::new(1.0, 1.0));
+        st.end_pan();
+        assert!(!st.auto_fit);
+        let z = st.viewport.zoom();
         st.set_view_size(1200.0, 800.0);
-        assert_eq!(st.viewport.zoom(), 2.0);
+        assert_eq!(st.viewport.zoom(), z);
+    }
+
+    #[test]
+    fn view_commands_zoom_and_fit() {
+        let mut st = EditorState::new();
+        st.set_view_size(1000.0, 700.0);
+        st.view_command(ViewCommand::ActualSize);
+        assert_eq!(st.viewport.zoom(), 1.0);
+        assert!(!st.auto_fit);
+        st.view_command(ViewCommand::ZoomIn);
+        assert_eq!(st.viewport.zoom(), 1.5);
+        st.view_command(ViewCommand::ZoomOut);
+        st.view_command(ViewCommand::ZoomOut);
+        assert!((st.viewport.zoom() - 2.0 / 3.0).abs() < 1e-6);
+        st.view_command(ViewCommand::Fit);
+        assert!(st.auto_fit);
+        assert_eq!(st.viewport.zoom(), st.viewport.fit_zoom());
+        let keys: HashSet<_> = ViewCommand::ALL
+            .iter()
+            .flat_map(|c| c.keystrokes().iter().copied())
+            .chain(FileCommand::ALL.iter().map(|c| c.keystroke()))
+            .collect();
+        let n: usize = ViewCommand::ALL.iter().map(|c| c.keystrokes().len()).sum();
+        assert_eq!(keys.len(), n + FileCommand::ALL.len());
     }
 
     #[test]

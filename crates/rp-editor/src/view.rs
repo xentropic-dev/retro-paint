@@ -2,18 +2,25 @@
 //! status bar. Thin: every decision goes through [`EditorState`].
 
 use gpui::{
-    App, Context, Div, FocusHandle, KeyBinding, MouseButton, Rgba, SharedString, Stateful, Window,
-    actions, div, prelude::*, px, rgb,
+    App, Context, Div, FocusHandle, KeyBinding, KeyDownEvent, KeyUpEvent, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Rgba, ScrollDelta,
+    ScrollWheelEvent, SharedString, Stateful, Window, actions, canvas, div, point, prelude::*, px,
+    rgb,
 };
 use rp_doc::Tool;
 use rp_palette_dither::Rgb;
 
 use crate::FrameSink;
-use crate::state::{EditorState, FileCommand, Outcome, shortcut_label, tool_label};
+use crate::canvas_view::{self, CanvasCache};
+use crate::state::{EditorState, FileCommand, Outcome, ViewCommand, shortcut_label, tool_label};
+use crate::viewport::Vec2;
 
 actions!(
     retro_paint,
-    [NewFile, OpenFile, SaveFile, SaveFileAs, ExportPng, Quit]
+    [
+        NewFile, OpenFile, SaveFile, SaveFileAs, ExportPng, Quit, ZoomIn, ZoomOut, ActualSize,
+        FitCanvas
+    ]
 );
 
 /// Registers the File-menu key bindings.
@@ -29,6 +36,14 @@ pub fn bind_keys(cx: &mut App) {
             FileCommand::Quit => KeyBinding::new(k, Quit, None),
         }
     }));
+    for cmd in ViewCommand::ALL {
+        cx.bind_keys(cmd.keystrokes().iter().map(|&k| match cmd {
+            ViewCommand::ZoomIn => KeyBinding::new(k, ZoomIn, None),
+            ViewCommand::ZoomOut => KeyBinding::new(k, ZoomOut, None),
+            ViewCommand::ActualSize => KeyBinding::new(k, ActualSize, None),
+            ViewCommand::Fit => KeyBinding::new(k, FitCanvas, None),
+        }));
+    }
 }
 
 // Theme: dark neutral greys, one blue accent.
@@ -37,7 +52,6 @@ const BG_BAR: u32 = 0x2b2b2b;
 const BG_RIBBON: u32 = 0x323232;
 const BG_PANEL: u32 = 0x262626;
 const BG_PANEL_HEADER: u32 = 0x303030;
-const BG_CANVAS: u32 = 0x161616;
 const BG_HOVER: u32 = 0x3d3d3d;
 const BG_MENU: u32 = 0x2d2d2d;
 const ACCENT: u32 = 0x3d7fd9;
@@ -54,6 +68,9 @@ pub(crate) struct EditorView {
     focus: FocusHandle,
     pub(crate) tick: u32,
     sink: FrameSink,
+    canvas_cache: CanvasCache,
+    /// Window position of the canvas area's top-left corner (last layout).
+    canvas_origin: Point<Pixels>,
 }
 
 impl EditorView {
@@ -65,7 +82,17 @@ impl EditorView {
             focus,
             tick: 0,
             sink,
+            canvas_cache: CanvasCache::default(),
+            canvas_origin: point(px(0.), px(0.)),
         }
+    }
+
+    /// Window position → canvas-area (viewport screen) coordinates.
+    fn local(&self, p: Point<Pixels>) -> Vec2 {
+        Vec2::new(
+            f32::from(p.x - self.canvas_origin.x),
+            f32::from(p.y - self.canvas_origin.y),
+        )
     }
 
     /// Advances the DOS test pattern (kept until the render worker exists).
@@ -212,27 +239,118 @@ impl EditorView {
             )
     }
 
-    fn canvas_area(&self) -> Div {
-        let doc = &self.state.document;
-        let (c, o) = (doc.canvas_size, doc.output_size);
+    /// The canvas area: draws the flattened document and turns pointer input
+    /// into viewport changes. Layout happens in the `canvas` element's
+    /// prepaint, which also records the area's size and origin.
+    fn canvas_area(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        let this = cx.entity();
+        let surface = canvas(
+            move |bounds, window, cx| {
+                let scale = window.scale_factor();
+                let (plan, zoom_changed) = this.update(cx, |v, _| {
+                    v.canvas_origin = bounds.origin;
+                    let before = v.state.viewport.zoom();
+                    v.state
+                        .set_view_size(f32::from(bounds.size.width), f32::from(bounds.size.height));
+                    let plan = v.canvas_cache.prepare(&v.state, bounds, scale);
+                    (plan, v.state.viewport.zoom() != before)
+                });
+                if zoom_changed {
+                    // The status bar was already laid out with the old zoom.
+                    let this = this.clone();
+                    window.on_next_frame(move |_, cx| this.update(cx, |_, cx| cx.notify()));
+                }
+                plan
+            },
+            |_, plan, window, _| canvas_view::paint(plan, window),
+        )
+        .size_full();
+
         div()
+            .id("canvas-area")
             .flex_1()
             .h_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .bg(rgb(BG_CANVAS))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .gap_1()
-                    .text_color(rgb(TEXT_DIM))
-                    .text_sm()
-                    .child(format!("Canvas {}×{}", c.width, c.height))
-                    .child(format!("Output {}×{}", o.width, o.height)),
+            .overflow_hidden()
+            .bg(rgb(canvas_view::SURROUND))
+            .child(surface)
+            .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _, cx| {
+                let p = this.local(ev.position);
+                this.state.pointer_moved(p);
+                cx.notify();
+            }))
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                if !*hovered && this.state.pan_drag.is_none() {
+                    this.state.pointer_left();
+                    cx.notify();
+                }
+            }))
+            .on_mouse_down(
+                MouseButton::Middle,
+                cx.listener(|this, ev: &MouseDownEvent, _, cx| {
+                    this.state.begin_pan(this.local(ev.position));
+                    cx.notify();
+                }),
             )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, ev: &MouseDownEvent, _, cx| {
+                    if this.state.space_held {
+                        this.state.begin_pan(this.local(ev.position));
+                        cx.notify();
+                    }
+                }),
+            )
+            .on_mouse_up(MouseButton::Middle, cx.listener(Self::on_pan_end))
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::on_pan_end))
+            .on_mouse_up_out(MouseButton::Middle, cx.listener(Self::on_pan_end))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_pan_end))
+            .on_scroll_wheel(cx.listener(|this, ev: &ScrollWheelEvent, _, cx| {
+                let (d, lines) = match ev.delta {
+                    ScrollDelta::Pixels(p) => ((f32::from(p.x), f32::from(p.y)), false),
+                    ScrollDelta::Lines(p) => ((p.x, p.y), true),
+                };
+                let p = this.local(ev.position);
+                this.state.wheel(p, d.0, d.1, lines, ev.modifiers.control);
+                cx.notify();
+            }))
+    }
+
+    fn view_cmd(&mut self, cmd: ViewCommand, cx: &mut Context<Self>) {
+        self.state.view_command(cmd);
+        cx.notify();
+    }
+    fn on_zoom_in(&mut self, _: &ZoomIn, _: &mut Window, cx: &mut Context<Self>) {
+        self.view_cmd(ViewCommand::ZoomIn, cx);
+    }
+    fn on_zoom_out(&mut self, _: &ZoomOut, _: &mut Window, cx: &mut Context<Self>) {
+        self.view_cmd(ViewCommand::ZoomOut, cx);
+    }
+    fn on_actual_size(&mut self, _: &ActualSize, _: &mut Window, cx: &mut Context<Self>) {
+        self.view_cmd(ViewCommand::ActualSize, cx);
+    }
+    fn on_fit(&mut self, _: &FitCanvas, _: &mut Window, cx: &mut Context<Self>) {
+        self.view_cmd(ViewCommand::Fit, cx);
+    }
+
+    fn on_pan_end(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.state.pan_drag.is_some() {
+            self.state.end_pan();
+            cx.notify();
+        }
+    }
+
+    fn on_key_down(&mut self, ev: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if ev.keystroke.key == "space" && !self.state.space_held {
+            self.state.space_held = true;
+            cx.notify();
+        }
+    }
+
+    fn on_key_up(&mut self, ev: &KeyUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if ev.keystroke.key == "space" {
+            self.state.space_held = false;
+            cx.notify();
+        }
     }
 
     fn panels(&self) -> Div {
@@ -272,6 +390,8 @@ impl EditorView {
                 doc.output_size.width,
                 doc.output_size.height
             ))
+            .child(format!("Zoom {}", self.state.zoom_label()))
+            .child(format!("Cursor {}", self.state.cursor_label()))
             .child(self.state.status.clone())
     }
 }
@@ -348,6 +468,12 @@ impl Render for EditorView {
             .on_action(cx.listener(Self::on_save_as))
             .on_action(cx.listener(Self::on_export_png))
             .on_action(cx.listener(Self::on_quit))
+            .on_action(cx.listener(Self::on_zoom_in))
+            .on_action(cx.listener(Self::on_zoom_out))
+            .on_action(cx.listener(Self::on_actual_size))
+            .on_action(cx.listener(Self::on_fit))
+            .on_key_down(cx.listener(Self::on_key_down))
+            .on_key_up(cx.listener(Self::on_key_up))
             .relative()
             .size_full()
             .flex()
@@ -362,7 +488,7 @@ impl Render for EditorView {
                     .min_h_0()
                     .flex()
                     .flex_row()
-                    .child(self.canvas_area())
+                    .child(self.canvas_area(cx))
                     .child(self.panels()),
             )
             .child(self.status_bar())

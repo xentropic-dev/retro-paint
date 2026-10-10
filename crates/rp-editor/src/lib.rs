@@ -10,6 +10,7 @@
 //! frames to the DOS view; the editor never depends on `rp-dos`.
 
 pub mod canvas_image;
+mod canvas_view;
 pub mod state;
 mod view;
 pub mod viewport;
