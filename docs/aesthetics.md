@@ -82,3 +82,5 @@ The DOS view is rendered through a CRT post-process shader ported from an earlie
 - subtle time-driven flicker
 - vignette
 - phosphor tint, left at white so CGA colors pass through unchanged
+
+The GLSL source is `crates/rp-dos/shaders/crt.fs`; `crates/rp-dos/src/crt.rs` holds its parameters (original defaults: curvature 0.18, scanlines 0.35, flicker 0.04, white phosphor), a pure-Rust mirror of the shader math for tests, and `tube_rect`, which places the tube in the window. One change from the original: the scanline term draws one dark gap per DOS screen row, on the boundary between rows, where the original darkened every other row. Row centers stay at full brightness, so CGA colors come through exactly. `cargo run -p rp-dos --example crt-demo -- mobile|desktop` (or `RP_DOS_DEMO=mobile|desktop` on the app) shows the sample screen through the shader.
