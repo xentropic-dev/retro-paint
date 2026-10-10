@@ -43,6 +43,16 @@ The editor and DOS view are always two separate OS windows. With one screen, the
 - Insert images.
 - Apply a brush. GIMP brushes are supported in `.gbr` (bitmap) and `.vbr` (parametric) formats.
 
+### Layers panel
+
+Top of the right-hand panel column. The list shows the top of the stack at the top. Each row has a visibility toggle, the name, and badges for an image layer (IMG), a pixel or position lock (LOCK) and a mask (MASK); the selected row is highlighted. Click a row to select it; double-click it to rename inline (Enter applies, Escape cancels, clicking elsewhere applies; an empty name keeps the old one). Above the list are controls for the selected layer: blend mode (Normal, Multiply, Screen, Overlay), opacity (a click-to-set bar in 5% segments plus −/+ steppers of 5%), Pixels and Position lock toggles, and Add/Remove mask. Below it are New, Delete, Up and Down.
+
+- **New** adds a transparent, canvas-sized paint layer directly above the selected layer, named `Layer N` (one more than the highest existing `Layer N`), and selects it.
+- **Delete** removes the selected layer, then selects the layer that was below it (or the new bottom layer). The last remaining layer cannot be deleted.
+- **Up / Down** move the selected layer one step and stop at the ends.
+- **Add mask** creates an all-white (fully showing) canvas-sized grayscale mask.
+- A new or opened document selects its top layer.
+
 ## Canvas, output, and screen resolutions
 
 Three separate sizes are involved:

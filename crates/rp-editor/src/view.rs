@@ -63,6 +63,8 @@ pub(crate) const TEXT_DIM: u32 = 0x8a8a8a;
 const MENU_BAR_H: f32 = 26.;
 const RIBBON_H: f32 = 44.;
 const PANEL_W: f32 = 260.;
+/// The Layers panel keeps at least this height; Filter and Swatches give way.
+const LAYERS_MIN_H: f32 = 260.;
 
 /// Runs `f` on the shared state and notifies its observers (every view that
 /// shows it). The single path for mutating [`EditorState`] from a view.
@@ -96,7 +98,7 @@ impl EditorView {
         window.focus(&focus, cx);
         let state = cx.new(|_| EditorState::new());
         cx.observe(&state, |_, _, cx| cx.notify()).detach();
-        let layers_panel = cx.new(|cx| LayersPanel::new(state.clone(), cx));
+        let layers_panel = cx.new(|cx| LayersPanel::new(state.clone(), window, cx));
         Self {
             state,
             layers_panel,
@@ -385,9 +387,25 @@ impl EditorView {
             .bg(rgb(BG_PANEL))
             .border_l_1()
             .border_color(rgb(BORDER))
-            .child(div().flex_1().min_h_0().child(self.layers_panel.clone()))
-            .child(panel("Filter", "Dither settings".into()).h(px(220.)))
-            .child(panel("Swatches", "No swatches".into()).h(px(140.)))
+            .overflow_hidden()
+            // In short windows the placeholder panels shrink first.
+            .child(
+                div()
+                    .flex_1()
+                    .min_h(px(LAYERS_MIN_H))
+                    .overflow_hidden()
+                    .child(self.layers_panel.clone()),
+            )
+            .child(
+                panel("Filter", "Dither settings".into())
+                    .h(px(220.))
+                    .overflow_hidden(),
+            )
+            .child(
+                panel("Swatches", "No swatches".into())
+                    .h(px(140.))
+                    .overflow_hidden(),
+            )
     }
 
     fn status_bar(&self, cx: &App) -> Div {
