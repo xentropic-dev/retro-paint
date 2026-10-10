@@ -454,6 +454,48 @@ mod tests {
         }
     }
 
+    /// Every 8-bit gray, 0..=255 in a 256×4 ramp.
+    fn gray_ramp() -> Vec<[f32; 3]> {
+        let px: Vec<Rgb> = (0..4)
+            .flat_map(|_| (0..=255u8).map(|v| Rgb::new(v, v, v)))
+            .collect();
+        linear_from_rgb(&px)
+    }
+
+    #[test]
+    fn gray_ramp_maps_only_to_grays_under_none() {
+        // Mid-grays (sRGB ~124–131) used to land on Cyan with plain OKLab.
+        let grays = Palette::new([Black, DarkGray, LightGray, White]).unwrap();
+        let lut = NearestLut::new(Palette::full());
+        let out = dither(
+            256,
+            4,
+            &gray_ramp(),
+            &lut,
+            &DitherParams::with_method(DitherMethod::None),
+        );
+        assert_palette_only(out.pixels.iter().copied(), &grays);
+        // And the ramp is monotonic: dark to light, all four grays used.
+        let row = &out.pixels[..256];
+        assert!(row.windows(2).all(|w| w[0].rgb().r <= w[1].rgb().r));
+        assert_eq!(
+            (row[0], row[100], row[200], row[255]),
+            (Black, DarkGray, LightGray, White)
+        );
+    }
+
+    #[test]
+    fn gray_ramp_stays_gray_under_every_method() {
+        // Neutral input never picks a chromatic color, so no cyan/brown
+        // specks in dithered gray ramps.
+        let grays = Palette::new([Black, DarkGray, LightGray, White]).unwrap();
+        let lut = NearestLut::new(Palette::full());
+        for params in all_params() {
+            let out = dither(256, 4, &gray_ramp(), &lut, &params);
+            assert_palette_only(out.pixels.iter().copied(), &grays);
+        }
+    }
+
     #[test]
     fn palette_colors_pass_through_unchanged() {
         // A pixel already in the palette has zero error.

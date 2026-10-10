@@ -3,9 +3,10 @@
 //! See docs/filter-and-palette.md, "Color matching" and "Decisions". The
 //! table is indexed by sRGB: each 8-bit channel is reduced to 6 bits
 //! (`v >> 2`), so bin `i` covers channel values `4i..=4i+3`. Each entry holds
-//! the palette color nearest in OKLab to the bin's **center**, sRGB
-//! `(4i + 1.5) / 255` per channel. Ties go to the color earlier in palette
-//! order.
+//! the palette color nearest to the bin's **center**, sRGB
+//! `(4i + 1.5) / 255` per channel, under [`match_dist2`] (OKLab with the
+//! chroma terms weighted by [`crate::color::CHROMA_WEIGHT`] so neutral grays
+//! resolve to the grays). Ties go to the color earlier in palette order.
 //!
 //! Lookups return a [`CgaColor`]. Use [`CgaColor::linear`] for the error term
 //! in diffusion and [`Palette::position`] if a palette-relative index is
@@ -14,10 +15,10 @@
 //! Accuracy: for a bin-center color the table equals [`nearest_oklab`]
 //! exactly. For any other color `x` in a bin with center `c`, the triangle
 //! inequality bounds the error: `d(x, lut) <= d(x, nearest) + 2·d(x, c)` in
-//! OKLab distance. In practice a small fraction of colors right on a decision
+//! the [`match_dist2`] metric. In practice a small fraction of colors right on a decision
 //! boundary pick the neighbor; see the tests.
 
-use crate::color::{linear_to_oklab, linear_to_srgb8, oklab_dist2, srgb_to_linear};
+use crate::color::{linear_to_oklab, linear_to_srgb8, match_dist2, srgb_to_linear};
 use crate::palette::{CgaColor, Palette, Rgb};
 
 /// Bins per channel.
@@ -93,7 +94,7 @@ fn nearest_in(targets: &[(CgaColor, [f32; 3])], lab: [f32; 3]) -> CgaColor {
     let mut best = targets[0].0;
     let mut best_d = f32::INFINITY;
     for &(c, t) in targets {
-        let d = oklab_dist2(lab, t);
+        let d = match_dist2(lab, t);
         if d < best_d {
             best_d = d;
             best = c;
@@ -102,15 +103,15 @@ fn nearest_in(targets: &[(CgaColor, [f32; 3])], lab: [f32; 3]) -> CgaColor {
     best
 }
 
-/// Brute-force nearest palette color in OKLab to a linear-light color, with
-/// the same tie rule as [`NearestLut`]. Slow (16 distances per call); the
+/// Brute-force nearest palette color to a linear-light color, with the same
+/// distance ([`match_dist2`]) and tie rule as [`NearestLut`]. Slow (16 distances per call); the
 /// reference the table is checked against.
 pub fn nearest_oklab(palette: &Palette, lin: [f32; 3]) -> CgaColor {
     let lab = linear_to_oklab(lin);
     let mut best = palette.colors()[0];
     let mut best_d = f32::INFINITY;
     for &c in palette.colors() {
-        let d = oklab_dist2(lab, c.oklab());
+        let d = match_dist2(lab, c.oklab());
         if d < best_d {
             best_d = d;
             best = c;
@@ -163,7 +164,7 @@ mod tests {
     }
 
     fn dist(a: [f32; 3], b: [f32; 3]) -> f32 {
-        oklab_dist2(a, b).sqrt()
+        match_dist2(a, b).sqrt()
     }
 
     #[test]
@@ -204,11 +205,11 @@ mod tests {
 
     /// For random 8-bit colors the table may disagree with brute force only
     /// near a decision boundary. Check (1) the triangle-inequality bound holds
-    /// for every sample, (2) the chosen color is never more than 0.02 OKLab
-    /// distance worse than the true nearest (about one just-noticeable
-    /// difference; measured worst is ~0.0096, in the darks where bins are
-    /// widest in OKLab), and (3) fewer than 3% of samples disagree at all
-    /// (measured ~1.7% for the full 16, under 1.1% for 1–5 color subsets).
+    /// for every sample, (2) the chosen color is never more than 0.02 worse
+    /// than the true nearest in the matching distance (about one
+    /// just-noticeable difference; measured worst is ~0.012), and (3) fewer
+    /// than 3% of samples disagree at all (measured ~1.7% for the full 16,
+    /// under 1% for 1–5 color subsets).
     #[test]
     fn random_colors_agree_with_brute_force_within_bin_error() {
         const N: usize = 20_000;
@@ -239,6 +240,51 @@ mod tests {
                 mismatches * 100 < 3 * N,
                 "{p:?}: {mismatches}/{N} random colors disagree"
             );
+        }
+    }
+
+    /// Every color within 0.02 OKLab chroma (about one JND) of the gray axis
+    /// maps to one of the four grays in the full palette, at every lightness.
+    /// Plain OKLab sent sRGB mid-grays (~124–131) to Cyan.
+    #[test]
+    fn near_neutrals_map_to_grays() {
+        let p = Palette::full();
+        let grays = [Black, DarkGray, LightGray, White];
+        for li in 0..=100 {
+            let l = li as f32 / 100.0;
+            for hi in 0..72 {
+                let h = hi as f32 * std::f32::consts::TAU / 72.0;
+                for c in [0.0, 0.01, 0.02] {
+                    let lab = [l, c * h.cos(), c * h.sin()];
+                    let got = nearest_oklab(&p, crate::color::oklab_to_linear(lab));
+                    assert!(grays.contains(&got), "{lab:?} -> {got:?}");
+                }
+            }
+        }
+        let lut = NearestLut::new(p);
+        for v in 0..=255u8 {
+            let got = lut.nearest(Rgb::new(v, v, v));
+            assert!(grays.contains(&got), "gray {v} -> {got:?}");
+        }
+    }
+
+    /// The chroma weight must not wreck saturated matches: each fully
+    /// saturated primary/secondary still picks a color of its own hue.
+    #[test]
+    fn saturated_colors_keep_their_hue() {
+        let lut = NearestLut::new(Palette::full());
+        let cases = [
+            (Rgb::new(255, 0, 0), [Red, LightRed]),
+            (Rgb::new(0, 255, 0), [Green, LightGreen]),
+            (Rgb::new(0, 0, 255), [Blue, LightBlue]),
+            (Rgb::new(0, 255, 255), [Cyan, LightCyan]),
+            (Rgb::new(255, 0, 255), [Magenta, LightMagenta]),
+            (Rgb::new(255, 255, 0), [Yellow, Yellow]),
+            (Rgb::new(200, 100, 0), [Brown, Brown]),
+        ];
+        for (rgb, ok) in cases {
+            let got = lut.nearest(rgb);
+            assert!(ok.contains(&got), "{rgb} -> {got:?}");
         }
     }
 

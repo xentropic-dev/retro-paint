@@ -118,6 +118,26 @@ pub fn oklab_dist2(p: [f32; 3], q: [f32; 3]) -> f32 {
     d[0] * d[0] + d[1] * d[1] + d[2] * d[2]
 }
 
+/// Weight on the chroma terms (`a`, `b`) of [`match_dist2`], relative to `L`.
+///
+/// Plain OKLab puts sRGB mid-gray (~0.59 L) closer to Cyan (0.67 L, chroma
+/// 0.11) than to DarkGray or LightGray (0.45 / 0.74 L), because the CGA grays
+/// are far apart in lightness. Doubling the chroma terms is the smallest
+/// round weight that keeps a tube of radius ≥ 0.02 (about one JND) around
+/// the whole gray axis mapping to grays (1.75 gives 0.019; 2 gives 0.024).
+/// Lightness error is what dithering reproduces well; a hue cast on a
+/// neutral is not. See docs/filter-and-palette.md, "Color matching".
+pub const CHROMA_WEIGHT: f32 = 2.0;
+
+/// Squared nearest-color distance: OKLab with the `a`/`b` differences
+/// weighted by [`CHROMA_WEIGHT`], `ΔL² + w·(Δa² + Δb²)`. Still a Euclidean
+/// metric (OKLab with `a`, `b` scaled by `√w`), so the triangle inequality
+/// holds. Both [`crate::NearestLut`] and [`crate::nearest_oklab`] use it.
+pub fn match_dist2(p: [f32; 3], q: [f32; 3]) -> f32 {
+    let d = [p[0] - q[0], p[1] - q[1], p[2] - q[2]];
+    d[0] * d[0] + CHROMA_WEIGHT * (d[1] * d[1] + d[2] * d[2])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

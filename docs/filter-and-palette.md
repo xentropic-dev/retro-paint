@@ -44,6 +44,14 @@ Every method below has to answer one question for each pixel: which palette colo
 3. **Perceptual color space (CIELAB / OKLab).** Convert both colors and measure distance there. Most accurate, but costs more to compute.
 4. **Precomputed lookup table.** With only 16 target colors, we can precompute the nearest index for a quantized RGB cube, such as 32×32×32 or 64×64×64 entries. Any of the distance functions above can fill the table.
 
+### Chroma-weighted OKLab
+
+retro-paint measures nearest-color distance in OKLab with the chroma terms doubled: `ΔL² + 2·(Δa² + Δb²)` (`CHROMA_WEIGHT = 2` in `rp-palette-dither`). Plain Euclidean OKLab puts sRGB mid-grays (about 124–131) closer to Cyan than to DarkGray or LightGray. The CGA grays sit far apart in lightness (OKLab L 0.45 and 0.74), and Cyan (L 0.67, chroma 0.11) falls between them. That gave a cyan band in undithered gray ramps and cyan or brown specks in dithered ones.
+
+Weighting chroma is principled for this palette. Dithering reproduces lightness well, because the four grays and the two intensities of each hue mix spatially into in-between lightness levels. A hue cast on a neutral, though, is conspicuous and cannot be averaged back out. Weight 2 is the smallest round value that keeps every color within 0.02 OKLab chroma (about one JND) of the gray axis mapping to a gray at every lightness. Weight 1.75 only reaches 0.019. The metric is still Euclidean (OKLab with `a`, `b` scaled by √2), so the LUT's triangle-inequality accuracy bound still holds.
+
+Saturated colors keep their hue family. The weight mostly shifts low-chroma colors onto the grays and moves some lightness-vs-hue tradeoffs toward the matching hue, for example light yellow-green to Yellow and pale red to Brown. About 8% of random sRGB colors change their nearest color.
+
 Error diffusion works in floating-point linear light: sRGB is decoded before diffusion, so a 50/50 dither of two colors averages to the right brightness. The nearest-color lookup re-encodes to sRGB to index the table.
 
 ## Dithering methods
@@ -204,7 +212,7 @@ v1 has one global set of dither settings, applied once after flattening.
 ## Decisions
 
 - **First dithering methods:** none (nearest color), Bayer 4×4, Floyd–Steinberg, and Atkinson. The others in this document are candidates for later.
-- **Default color distance:** OKLab, baked into a 64×64×64 lookup table at startup, so each pixel costs one table read.
+- **Default color distance:** chroma-weighted OKLab (see "Chroma-weighted OKLab"), baked into a 64×64×64 lookup table at startup, so each pixel costs one table read.
 - **Live and export:** the dither is both. The DOS view re-dithers the full frame live on the CPU, and export uses the same code. With error diffusion, edits can shift patterns elsewhere in the image. This is accepted as part of the look.
 - **Palette subsets:** supported. The full 16 colors is the default. The authentic CGA 4-color modes are presets, and the user can also pick any custom subset.
 
