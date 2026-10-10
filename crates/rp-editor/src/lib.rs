@@ -9,6 +9,7 @@
 //! and hands each indexed frame to a callback. The binary forwards those
 //! frames to the DOS view; the editor never depends on `rp-dos`.
 
+pub mod canvas_image;
 pub mod state;
 mod view;
 pub mod viewport;
