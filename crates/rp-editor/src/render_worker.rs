@@ -44,7 +44,8 @@ pub type FrameSink = Box<dyn FnMut(FrameMsg) + Send>;
 pub const DEFAULT_BRUSH_DIAMETER: u32 = 3;
 
 /// Environment variable: when set, the worker prints per-frame timings
-/// (request → frame sent) to stderr.
+/// (request → frame sent) to stderr, and the editor prints when each canvas
+/// image is shown and how long taking it cost the UI thread.
 pub const TIMING_ENV: &str = "RP_RENDER_TIMING";
 
 /// What the pipeline needs to re-dither: a snapshot of the document.

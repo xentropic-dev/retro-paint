@@ -37,7 +37,7 @@ The `spike-two-windows` spike confirmed this works on Hyprland/Wayland: both win
 
 ## Data flow between views
 
-1. On each document change, the editor flattens the layers, downscales to output resolution, and dithers on the CPU (off the UI thread). The result is an indexed image at output resolution, one palette index per pixel.
+1. On each document change, the editor flattens the layers, downscales to output resolution, and dithers on the CPU (off the UI thread). The result is an indexed image at output resolution, one palette index per pixel. The same flattened full-color image (converted to BGRA, tagged with the document version) goes back to the editor's canvas view through a latest-only slot that a GPUI task awaits; the UI thread never flattens, ignores results older than the image it shows, and keeps showing the previous image while a render is in flight.
 2. The editor sends that image, plus cursor position, active tool, and active color, to the DOS thread over a channel. Only the newest frame matters, so older ones are dropped.
 3. The DOS thread draws the DOS screen (toolbars, palette strip, canvas window scrolled to follow the cursor, retro cursor) at 320×200 or 200×320 into an offscreen texture.
 4. The CRT shader (GLSL port of an earlier Bevy project's `crt.wgsl`) renders that texture to the window.
