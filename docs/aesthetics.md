@@ -45,13 +45,21 @@ The editor and DOS view are always two separate OS windows. With one screen, the
 
 ### Layers panel
 
-Top of the right-hand panel column. The list shows the top of the stack at the top. Each row has a visibility toggle, the name, and badges for an image layer (IMG), a pixel or position lock (LOCK) and a mask (MASK); the selected row is highlighted. Click a row to select it; double-click it to rename inline (Enter applies, Escape cancels, clicking elsewhere applies; an empty name keeps the old one). Above the list are controls for the selected layer: blend mode (Normal, Multiply, Screen, Overlay), opacity (a click-to-set bar in 5% segments plus −/+ steppers of 5%), Pixels and Position lock toggles, and Add/Remove mask. Below it are New, Delete, Up and Down.
+Top of the right-hand panel column. The list shows the top of the stack at the top. Each row has a visibility toggle, the name, and badges for an image layer (IMG), a pixel or position lock (LOCK) and a mask (MASK); the selected row is highlighted. Click a row to select it; double-click it to rename inline (Enter applies, Escape cancels, clicking elsewhere applies; an empty name keeps the old one). Above the list are controls for the selected layer: blend mode (Normal, Multiply, Screen, Overlay), opacity (a click-to-set bar in 5% segments plus −/+ steppers of 5%), Pixels and Position lock toggles, and Add/Remove mask. Below it are New, Image, Delete, Up and Down.
 
 - **New** adds a transparent, canvas-sized paint layer directly above the selected layer, named `Layer N` (one more than the highest existing `Layer N`), and selects it.
+- **Image** is File > Insert Image… (see below).
 - **Delete** removes the selected layer, then selects the layer that was below it (or the new bottom layer). The last remaining layer cannot be deleted.
 - **Up / Down** move the selected layer one step and stop at the ends.
 - **Add mask** creates an all-white (fully showing) canvas-sized grayscale mask.
 - A new or opened document selects its top layer.
+
+### Inserting images
+
+- **File > Insert Image…** (Ctrl+I), the Layers panel's **Image** button, or dropping files from a file manager onto the canvas. The dialog is the desktop's file chooser (XDG portal) and allows several files; each becomes its own layer, in order.
+- PNG, JPEG and WebP are read by content, not extension, as RGBA8 with straight alpha; the EXIF orientation is applied so the picture is upright. Decoding runs off the UI thread; the status bar shows `Loading <file>…`, then the result or why it failed (unreadable, unsupported format, corrupt, too large).
+- The new image layer goes directly above the selected layer, is named after the file stem, and becomes selected. It is centered on the canvas at 1:1 on whole pixels; an image larger than the canvas is scaled down uniformly to fit inside it, never up.
+- The source is kept at full resolution under its `rp_format::source_hash`; inserting the same picture again reuses the stored source.
 
 ### Painting
 
