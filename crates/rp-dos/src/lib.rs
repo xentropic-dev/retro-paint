@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 use rp_palette_dither::Rgb;
 
 mod compose;
+pub mod crt;
 mod glyphs;
 pub mod sample;
 mod screen;
@@ -20,9 +21,10 @@ mod scroll;
 mod window;
 
 pub use compose::{canvas_viewport, compose};
+pub use crt::{CrtParams, tube_rect};
 pub use screen::{IndexedScreen, Rect};
 pub use scroll::{SCROLL_MARGIN, ScrollState};
-pub use window::run_window;
+pub use window::{run_crt_demo, run_window};
 
 /// Wayland app_id (and X11 class) of the DOS window.
 pub const APP_ID: &str = "retro-paint-dos";
