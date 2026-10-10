@@ -10,8 +10,8 @@
 //! frames to the DOS view; the editor never depends on `rp-dos`.
 
 pub mod state;
-pub mod viewport;
 mod view;
+pub mod viewport;
 
 use std::time::Duration;
 

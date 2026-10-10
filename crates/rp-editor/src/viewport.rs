@@ -372,7 +372,10 @@ mod tests {
                 let (o, s) = v.canvas_rect();
                 if o.x <= 0.0 && o.y <= 0.0 && o.x + s.x >= 1000.0 && o.y + s.y >= 700.0 {
                     let after = v.screen_to_canvas(anchor);
-                    assert!(close(before, after, 1e-3), "{target}: {before:?} vs {after:?}");
+                    assert!(
+                        close(before, after, 1e-3),
+                        "{target}: {before:?} vs {after:?}"
+                    );
                 }
                 assert_eq!(v.zoom(), target.clamp(MIN_ZOOM, MAX_ZOOM));
             }
