@@ -11,11 +11,15 @@
 
 use std::sync::Arc;
 
-use gpui::{Bounds, Corners, Pixels, RenderImage, Window, fill, point, px, rgb, size};
+use gpui::{
+    BorderStyle, Bounds, ContentMask, Corners, PathBuilder, Pixels, RenderImage, Window, fill,
+    point, px, quad, rgb, size,
+};
 
 use crate::canvas_image::{CHECKER, SharpTile, checkerboard_bgra, plan_sharp_tile, upscale_tile};
 use crate::paint_ops::FrameView;
 use crate::render_worker::CanvasFrame;
+use crate::transform_ops::{HANDLE_SIZE, HandleLayout};
 use crate::viewport::{Vec2, Viewport};
 
 /// Canvas-area surround color.
@@ -44,6 +48,9 @@ pub(crate) struct CanvasPaint {
     /// The canvas image and where to draw it; `None` before the first frame.
     image: Option<(Arc<RenderImage>, Bounds<Pixels>)>,
     stale: Vec<Arc<RenderImage>>,
+    /// Select-tool transform handles (canvas-area coordinates), drawn over
+    /// the canvas.
+    pub(crate) handles: Option<HandleLayout>,
 }
 
 fn render_image(width: u32, height: u32, bgra: Vec<u8>) -> Arc<RenderImage> {
@@ -157,6 +164,7 @@ impl CanvasCache {
             checker: self.checker.as_ref().unwrap().1.clone(),
             image,
             stale: std::mem::take(&mut self.stale),
+            handles: None,
         }
     }
 }
@@ -172,9 +180,55 @@ pub(crate) fn paint(p: CanvasPaint, window: &mut Window) {
             let _ = window.paint_image(visible, bounds, Corners::default(), image, 0, false);
         }
     }
+    if let Some(h) = p.handles {
+        window.with_content_mask(Some(ContentMask { bounds: p.area }), |window| {
+            paint_handles(&h, p.area.origin, window);
+        });
+    }
     for img in p.stale {
         let _ = window.drop_image(img);
     }
+}
+
+/// Handle outline (dark) and fill (light) colors: visible on any image.
+const HANDLE_DARK: u32 = 0x111111;
+const HANDLE_LIGHT: u32 = 0xf0f0f0;
+
+/// The transformed box, its corner handles and the rotation handle.
+fn paint_handles(h: &HandleLayout, origin: gpui::Point<Pixels>, window: &mut Window) {
+    let at = |v: Vec2| point(origin.x + px(v.x), origin.y + px(v.y));
+    // Box and rotation stem: a light line over a wider dark one.
+    for (width, color) in [(3.0, HANDLE_DARK), (1.0, HANDLE_LIGHT)] {
+        let mut path = PathBuilder::stroke(px(width));
+        path.move_to(at(h.corners[0]));
+        for &c in &h.corners[1..] {
+            path.line_to(at(c));
+        }
+        path.close();
+        path.move_to(at(h.top_mid));
+        path.line_to(at(h.rotate));
+        if let Ok(path) = path.build() {
+            window.paint_path(path, rgb(color));
+        }
+    }
+    let square = |c: Vec2, radius: f32| {
+        let half = HANDLE_SIZE / 2.0;
+        quad(
+            Bounds::new(
+                at(Vec2::new(c.x - half, c.y - half)),
+                size(px(HANDLE_SIZE), px(HANDLE_SIZE)),
+            ),
+            px(radius),
+            rgb(HANDLE_LIGHT),
+            px(1.),
+            rgb(HANDLE_DARK),
+            BorderStyle::default(),
+        )
+    };
+    for &c in &h.corners {
+        window.paint_quad(square(c, 0.0));
+    }
+    window.paint_quad(square(h.rotate, HANDLE_SIZE / 2.0));
 }
 
 #[cfg(test)]

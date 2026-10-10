@@ -214,7 +214,10 @@ impl HandleLayout {
 
 /// Whole-pixel drag offset from `start` to `p` (canvas coordinates).
 pub fn drag_delta(start: Vec2, p: Vec2) -> (i32, i32) {
-    ((p.x - start.x).round() as i32, (p.y - start.y).round() as i32)
+    (
+        (p.x - start.x).round() as i32,
+        (p.y - start.y).round() as i32,
+    )
 }
 
 /// `t` moved by `(dx, dy)` canvas pixels.
@@ -285,7 +288,13 @@ pub fn scale_from_corner(
 /// `t0` rotated about its center by the pointer's angle change from `start`
 /// to `p` (canvas coordinates, measured around `center`). `snap` rounds the
 /// result to 15° steps.
-pub fn rotate_about_center(t0: Transform, center: Vec2, start: Vec2, p: Vec2, snap: bool) -> Transform {
+pub fn rotate_about_center(
+    t0: Transform,
+    center: Vec2,
+    start: Vec2,
+    p: Vec2,
+    snap: bool,
+) -> Transform {
     let angle = |q: Vec2| (q.y - center.y).atan2(q.x - center.x);
     let mut r = normalize_angle(t0.rotation + angle(p) - angle(start));
     if snap {
@@ -473,6 +482,18 @@ impl EditorState {
         }
     }
 
+    /// Records the shift key. During a drag the pointer's current position
+    /// is re-applied, so pressing or releasing shift takes effect at once.
+    pub fn set_shift(&mut self, shift: bool) {
+        if shift == self.shift_held {
+            return;
+        }
+        self.shift_held = shift;
+        if let (Some(_), Some(c)) = (self.transform_drag, self.cursor_canvas) {
+            self.continue_transform(self.viewport.canvas_to_screen(c), shift);
+        }
+    }
+
     /// Ends the drag, if any.
     pub fn end_transform(&mut self) {
         self.transform_drag = None;
@@ -623,11 +644,7 @@ mod tests {
         // must cover the same pixel centers.
         let mut doc = Document::new(Size::new(4, 4));
         let hash = SourceHash::new("r");
-        doc.push_layer(Layer::image(
-            "r",
-            hash.clone(),
-            t(1.5, 1.5, 1.0, 1.0, 90.0),
-        ));
+        doc.push_layer(Layer::image("r", hash.clone(), t(1.5, 1.5, 1.0, 1.0, 90.0)));
         let mut sources = rp_doc::SourceStore::new();
         sources.insert(hash, RgbaImage::filled(Size::new(2, 1), [255, 0, 0, 255]));
         let flat = doc.flatten(&sources);
@@ -759,7 +776,13 @@ mod tests {
         }
         // A flipped image stays flipped.
         let flipped = t(40.0, 0.0, -1.0, 1.0, 0.0);
-        let t3 = scale_from_corner(flipped, SRC, Corner::BottomRight, Vec2::new(80.0, 40.0), true);
+        let t3 = scale_from_corner(
+            flipped,
+            SRC,
+            Corner::BottomRight,
+            Vec2::new(80.0, 40.0),
+            true,
+        );
         assert!(t3.scale_x < 0.0);
         assert_close(Frame::of(&t3, SRC).corner(Corner::TopLeft), Vec2::default());
     }
@@ -774,10 +797,7 @@ mod tests {
         let t1 = rotate_about_center(t0, c, start, p, false);
         assert!((t1.rotation - PI / 2.0).abs() < EPS);
         assert_close(Frame::of(&t1, SRC).center, c);
-        assert_eq!(
-            (t1.translate_x, t1.scale_x),
-            (t0.translate_x, t0.scale_x)
-        );
+        assert_eq!((t1.translate_x, t1.scale_x), (t0.translate_x, t0.scale_x));
     }
 
     #[test]
@@ -995,5 +1015,13 @@ mod tests {
         ));
         let r = transform_of(&st, img).rotation.to_degrees();
         assert!((r - 45.0).abs() < 1e-3, "{r}");
+        // Releasing shift without moving re-applies the free angle.
+        let v = st.doc_version;
+        st.set_shift(false);
+        let r = transform_of(&st, img).rotation.to_degrees();
+        assert!((r - 50.0).abs() < 1e-2, "{r}");
+        assert_eq!(st.doc_version, v + 1);
+        st.set_shift(false);
+        assert_eq!(st.doc_version, v + 1);
     }
 }

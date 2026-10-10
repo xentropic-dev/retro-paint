@@ -3,9 +3,9 @@
 
 use gpui::{
     App, Context, Div, Entity, ExternalPaths, FocusHandle, KeyBinding, KeyDownEvent, KeyUpEvent,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Rgba, ScrollDelta,
-    ScrollWheelEvent, SharedString, Stateful, Window, actions, canvas, div, point, prelude::*, px,
-    rgb,
+    ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
+    Point, Rgba, ScrollDelta, ScrollWheelEvent, SharedString, Stateful, Window, actions, canvas,
+    div, point, prelude::*, px, rgb,
 };
 use rp_doc::Tool;
 use rp_palette_dither::Rgb;
@@ -19,6 +19,7 @@ use crate::render_worker::{
     CanvasReceiver, Overlay, RenderJob, Request, TIMING_ENV, WorkerClient, next_request,
 };
 use crate::state::{EditorState, FileCommand, Outcome, ViewCommand, shortcut_label, tool_label};
+use crate::transform_ops::arrow_nudge;
 use crate::viewport::Vec2;
 
 actions!(
@@ -413,7 +414,8 @@ impl EditorView {
                             f32::from(bounds.size.width),
                             f32::from(bounds.size.height),
                         );
-                        let plan = cache.prepare(&s.viewport, bounds, scale);
+                        let mut plan = cache.prepare(&s.viewport, bounds, scale);
+                        plan.handles = s.transform_handles();
                         (plan, s.viewport.zoom() != before)
                     })
                 });
@@ -448,7 +450,9 @@ impl EditorView {
                     _ => None,
                 };
                 let frame = this.canvas_cache.frame_view();
+                let shift = ev.modifiers.shift;
                 this.state.update(cx, |s, cx| {
+                    s.shift_held = shift;
                     s.pointer_moved(p);
                     if let (Some(button), Some(c), Tool::Picker) = (pick, s.cursor_canvas, s.tool)
                         && s.pan_drag.is_none()
@@ -474,6 +478,8 @@ impl EditorView {
                 MouseButton::Left,
                 cx.listener(|this, ev: &MouseDownEvent, _, cx| {
                     let p = this.local(ev.position);
+                    let shift = ev.modifiers.shift;
+                    this.state.update(cx, |s, _| s.shift_held = shift);
                     if this.state.read(cx).space_held {
                         this.edit(cx, |s| s.begin_pan(p));
                     } else {
@@ -524,7 +530,8 @@ impl EditorView {
     }
 
     /// A paint button went down at canvas-area point `p`: start a stroke
-    /// (Brush, Eraser) or pick a color (Picker).
+    /// (Brush, Eraser), pick a color (Picker) or start a move / transform
+    /// drag (Move, Select; left button only).
     fn press(&mut self, p: Vec2, button: PaintButton, cx: &mut Context<Self>) {
         let frame = self.canvas_cache.frame_view();
         self.state.update(cx, |s, cx| {
@@ -534,14 +541,19 @@ impl EditorView {
                 s.begin_stroke(c, button);
             } else if s.tool == Tool::Picker {
                 s.pick_color(frame, c, button);
+            } else if s.tool_transforms() && button == PaintButton::Primary {
+                s.begin_transform(p);
             }
             cx.notify();
         });
     }
 
     fn on_paint_end(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if self.state.read(cx).stroke.is_some() {
+        let s = self.state.read(cx);
+        if s.stroke.is_some() {
             self.edit(cx, |s| s.end_stroke());
+        } else if s.transform_drag.is_some() {
+            self.edit(cx, |s| s.end_transform());
         }
     }
 
@@ -555,6 +567,16 @@ impl EditorView {
         let k = &ev.keystroke;
         let m = &k.modifiers;
         let plain = !(m.control || m.alt || m.platform || m.function);
+        let s = self.state.read(cx);
+        if plain
+            && s.tool_transforms()
+            && s.renaming.is_none()
+            && s.transform_drag.is_none()
+            && let Some((dx, dy)) = arrow_nudge(&k.key, m.shift)
+        {
+            self.edit(cx, |s| s.nudge_selected(dx, dy));
+            return;
+        }
         match k.key.as_str() {
             "space" if !self.state.read(cx).space_held => {
                 self.edit(cx, |s| s.space_held = true);
@@ -725,6 +747,12 @@ impl Render for EditorView {
             .on_action(cx.listener(Self::on_fit))
             .on_key_down(cx.listener(Self::on_key_down))
             .on_key_up(cx.listener(Self::on_key_up))
+            .on_modifiers_changed(cx.listener(|this, ev: &ModifiersChangedEvent, _, cx| {
+                let shift = ev.modifiers.shift;
+                if shift != this.state.read(cx).shift_held {
+                    this.edit(cx, |s| s.set_shift(shift));
+                }
+            }))
             .relative()
             .size_full()
             .flex()

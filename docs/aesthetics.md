@@ -51,7 +51,7 @@ Top of the right-hand panel column. The list shows the top of the stack at the t
 - **Image** is File > Insert Image… (see below).
 - **Delete** removes the selected layer, then selects the layer that was below it (or the new bottom layer). The last remaining layer cannot be deleted.
 - **Up / Down** move the selected layer one step and stop at the ends.
-- **Add mask** creates an all-white (fully showing) canvas-sized grayscale mask.
+- **Add mask** creates an all-white (fully showing) canvas-sized grayscale mask. Masks live in canvas space: moving, scaling or rotating the layer leaves its mask where it is (v1 decision).
 - A new or opened document selects its top layer.
 
 ### Inserting images
@@ -60,6 +60,16 @@ Top of the right-hand panel column. The list shows the top of the stack at the t
 - PNG, JPEG and WebP are read by content, not extension, as RGBA8 with straight alpha; the EXIF orientation is applied so the picture is upright. Decoding runs off the UI thread; the status bar shows `Loading <file>…`, then the result or why it failed (unreadable, unsupported format, corrupt, too large).
 - The new image layer goes directly above the selected layer, is named after the file stem, and becomes selected. It is centered on the canvas at 1:1 on whole pixels; an image larger than the canvas is scaled down uniformly to fit inside it, never up.
 - The source is kept at full resolution under its `rp_format::source_hash`; inserting the same picture again reuses the stored source.
+
+### Moving and transforming
+
+- **Move** drags the selected layer (paint or image) from wherever the left button goes down. **Select** does the same, and on an image layer it also draws the transformed bounding box with four square corner handles and a round rotation handle on a stem above the top edge. Handles are drawn and hit-tested in screen pixels, so they keep their size at any zoom. Paint layers have no handles; they only move.
+- Moves are whole canvas pixels for both layer kinds (the drag offset is rounded), so a 1:1 image stays pixel-aligned; an image keeps any fractional position it already had.
+- With Move or Select active, the arrow keys nudge the selected layer 1 px, Shift+arrow 10 px.
+- A corner handle scales about the opposite corner, which stays fixed (also when rotated). The aspect ratio is kept; hold Shift to scale freely. The box never flips and never gets smaller than 1 canvas pixel on a side.
+- The rotation handle rotates about the image center; hold Shift to snap to 15° steps. Pressing or releasing Shift mid-drag takes effect immediately.
+- A position-locked layer refuses moves, nudges, scaling and rotation; the status bar says why. A pixel lock does not stop moving.
+- The status bar shows the move offset, scale percentages or angle while dragging.
 
 ### Painting
 
