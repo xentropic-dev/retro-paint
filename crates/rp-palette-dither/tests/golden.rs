@@ -1,4 +1,4 @@
-//! Golden PNG tests for the dither methods.
+//! Golden PNG tests for the dither methods and the full `render` pipeline.
 //!
 //! Two fixtures are generated in code (no third-party images): a gradient
 //! chart and a synthetic "photo". Each is dithered with every method to the
@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 
 use rp_palette_dither::test_util::assert_palette_only;
 use rp_palette_dither::{
-    DitherMethod, DitherParams, FourColor, Intensity, NearestLut, Palette, Preset, Rgb, dither,
-    linear_from_rgb,
+    DitherMethod, DitherParams, DitherSettings, FourColor, Intensity, NearestLut, Palette,
+    PaletteChoice, PreAdjust, Preset, Renderer, Rgb, dither, linear_from_rgb, render,
 };
 
 struct Image {
@@ -273,4 +273,107 @@ fn four_color_modes() {
         &DitherParams::with_method(DitherMethod::FloydSteinberg),
         "photo_floyd_steinberg_palette1_high",
     );
+}
+
+/// Runs `render` on `rgba` and checks the output against a golden, plus the
+/// palette rule and that a `Renderer` gives the same bytes.
+fn run_render(
+    rgba: &[u8],
+    canvas: (u32, u32),
+    output: (u32, u32),
+    settings: &DitherSettings,
+    name: &str,
+) {
+    let out = render(rgba, canvas, output, settings);
+    let palette = settings.palette.palette();
+    assert_palette_only(out.pixels.iter().copied(), &palette);
+    assert_eq!((out.width, out.height), output, "{name}");
+    assert_eq!(out, Renderer::new().render(rgba, canvas, output, settings));
+    check_golden(name, out.width, out.height, &out.to_rgb8());
+}
+
+fn opaque_rgba(img: &Image) -> Vec<u8> {
+    img.pixels
+        .iter()
+        .flat_map(|c| {
+            let [r, g, b] = c.to_array();
+            [r, g, b, 255]
+        })
+        .collect()
+}
+
+#[test]
+fn render_photo_half_size_default() {
+    let img = photo();
+    run_render(
+        &opaque_rgba(&img),
+        (img.width, img.height),
+        (64, 48),
+        &DitherSettings::default(),
+        "render_photo_64x48_floyd_steinberg",
+    );
+}
+
+#[test]
+fn render_photo_fractional_bayer_adjusted() {
+    let img = photo();
+    let settings = DitherSettings {
+        adjust: PreAdjust {
+            brightness: 0.05,
+            contrast: 0.25,
+            saturation: 0.4,
+        },
+        ..DitherSettings::with_method(DitherMethod::Bayer4)
+    };
+    run_render(
+        &opaque_rgba(&img),
+        (img.width, img.height),
+        (80, 60),
+        &settings,
+        "render_photo_80x60_bayer4_adjusted",
+    );
+}
+
+#[test]
+fn render_photo_alpha_fade_four_color() {
+    // Alpha fades from 0 at the left edge to opaque at the right, so the
+    // left of the output is composited toward black.
+    let img = photo();
+    let mut rgba = opaque_rgba(&img);
+    for (i, px) in rgba.chunks_exact_mut(4).enumerate() {
+        let x = (i as u32 % img.width) as f32;
+        px[3] = (x / (img.width - 1) as f32 * 255.0 + 0.5) as u8;
+    }
+    let settings = DitherSettings {
+        palette: PaletteChoice::FourColor(FourColor::new(Preset::Palette0, Intensity::High)),
+        ..DitherSettings::with_method(DitherMethod::Atkinson)
+    };
+    run_render(
+        &rgba,
+        (img.width, img.height),
+        (96, 72),
+        &settings,
+        "render_photo_96x72_atkinson_palette0_alpha",
+    );
+}
+
+#[test]
+fn render_identity_size_matches_dither() {
+    // output == canvas: render is exactly dither of the linear input.
+    let img = photo();
+    let settings = DitherSettings::default();
+    let out = render(
+        &opaque_rgba(&img),
+        (img.width, img.height),
+        (img.width, img.height),
+        &settings,
+    );
+    let want = dither(
+        img.width,
+        img.height,
+        &linear_from_rgb(&img.pixels),
+        &NearestLut::new(Palette::full()),
+        &settings.params(),
+    );
+    assert_eq!(out, want);
 }
