@@ -16,7 +16,7 @@ Draft.
 ## Dependencies
 
 - **GPUI:** from the Zed git repository, pinned to a specific commit. The crates.io releases lag behind and the API changes often.
-- **raylib:** the `raylib` crate (raylib-rs 5.x), which bundles and builds raylib's C source.
+- **raylib:** the `raylib` crate (raylib-rs **6.x**, features `GLFW_BUILD_WAYLAND` and `SUPPORT_IMAGE_GENERATION`), which bundles and builds raylib's C source. We use 6.x rather than 5.x because the 5.x `wayland` feature links against a system `libglfw` (not installed by default on Arch), while 6.x builds raylib's bundled GLFW with the Wayland backend.
 
 ## Target platform
 
@@ -29,7 +29,9 @@ One process, two threads:
 - **Main thread:** GPUI editor, which owns the document (canvas, layers, settings).
 - **DOS view thread:** raylib window, which draws the fake DOS app and runs the CRT shader.
 
-Whether GPUI and raylib can each own a window in the same process on Wayland needs a spike before building more.
+The `spike-two-windows` spike confirmed this works on Hyprland/Wayland: both windows are native Wayland clients (`xwayland: false`) of one process, with app_ids `retro-paint-editor` (GPUI, main thread) and `retro-paint-dos` (raylib, thread `dos-view`). No child-process fallback is needed.
+
+**DOS window app_id.** raylib's `InitWindow` calls `glfwDefaultWindowHints()` just before creating the window, so a `GLFW_WAYLAND_APP_ID` hint set beforehand is lost. `rp-dos` defines `__wrap_glfwDefaultWindowHints`, which calls the real function and then sets the Wayland app_id and X11 class. Every binary that links `rp-dos` must pass `-Wl,--wrap=glfwDefaultWindowHints`; the `build.rs` of `rp-dos` (for its tests) and `retro-paint` emit it.
 
 ## Data flow between views
 

@@ -14,4 +14,8 @@ rp-format = { path = "crates/rp-format" }
 rp-brush = { path = "crates/rp-brush" }
 rp-dos = { path = "crates/rp-dos" }
 rp-editor = { path = "crates/rp-editor" }
-# gpui (Zed git, pinned rev) and raylib 5.x are added by the spike-two-windows feature.
+# GPUI from the Zed repo, pinned. Do not bump inside a feature branch.
+gpui = { git = "https://github.com/zed-industries/zed", rev = "96984225abc235519e66b5c6c9ed23b87621f868" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "96984225abc235519e66b5c6c9ed23b87621f868", features = ["font-kit", "wayland", "x11"] }
+# raylib-rs 6.x: the 5.x `wayland` feature links a system libglfw; 6.x builds the bundled GLFW with Wayland.
+raylib = { version = "6.0.0", features = ["GLFW_BUILD_WAYLAND", "SUPPORT_IMAGE_GENERATION"] }

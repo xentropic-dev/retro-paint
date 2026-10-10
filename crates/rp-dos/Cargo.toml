@@ -7,3 +7,4 @@ license.workspace = true
 [dependencies]
 rp-doc.workspace = true
 rp-palette-dither.workspace = true
+raylib.workspace = true

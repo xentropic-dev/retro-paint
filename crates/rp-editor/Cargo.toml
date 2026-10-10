@@ -9,3 +9,5 @@ rp-doc.workspace = true
 rp-palette-dither.workspace = true
 rp-format.workspace = true
 rp-brush.workspace = true
+gpui.workspace = true
+gpui_platform.workspace = true
