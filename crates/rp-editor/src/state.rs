@@ -4,8 +4,9 @@
 //! key binding to [`EditorState::dispatch`]. Commands that the `file-ops`
 //! feature will implement return [`Outcome::NotImplemented`] for now.
 
-use rp_doc::{Document, Layer, LayerKind, RgbaImage, Size, SourceStore, Tool};
+use rp_doc::{Document, Layer, LayerId, LayerKind, RgbaImage, Size, SourceStore, Tool};
 
+use crate::layer_ops::RenameEdit;
 use crate::viewport::{Vec2, Viewport};
 
 /// Canvas size of a fresh document: 4× the 200×320 mobile output.
@@ -165,6 +166,10 @@ pub struct EditorState {
     pub pan_drag: Option<Vec2>,
     /// Whether the space bar is held (space + drag pans).
     pub space_held: bool,
+    /// The layer the Layers panel acts on.
+    pub selected_layer: Option<LayerId>,
+    /// Inline rename in progress in the Layers panel.
+    pub renaming: Option<RenameEdit>,
 }
 
 impl Default for EditorState {
@@ -178,6 +183,7 @@ impl EditorState {
     pub fn new() -> Self {
         let document = new_document();
         let s = document.canvas_size;
+        let selected_layer = document.layers().last().map(Layer::id);
         Self {
             document,
             tool: Tool::default(),
@@ -190,12 +196,17 @@ impl EditorState {
             cursor_canvas: None,
             pan_drag: None,
             space_held: false,
+            selected_layer,
+            renaming: None,
         }
     }
 
-    /// Replaces the document, marks it changed and refits the view.
+    /// Replaces the document, selects its top layer, marks it changed and
+    /// refits the view.
     pub fn set_document(&mut self, document: Document) {
         let s = document.canvas_size;
+        self.selected_layer = document.layers().last().map(Layer::id);
+        self.renaming = None;
         self.document = document;
         self.viewport.set_canvas_size(s.width, s.height);
         self.auto_fit = true;
