@@ -14,6 +14,11 @@
 //! with one of the [`DitherMethod`]s (none, Bayer 4×4, Floyd–Steinberg,
 //! Atkinson) per [`DitherParams`].
 //!
+//! Pipeline: [`render`] (or a [`Renderer`], which caches the LUT) takes the
+//! flattened straight-alpha RGBA canvas through alpha-over-black, box
+//! downscale, pre-adjust, and dither per [`DitherSettings`]. It is the one
+//! entry point for the live view and export.
+//!
 //! With the `test-util` feature, `test_util::assert_palette_only` checks the
 //! palette rule on any image.
 
@@ -21,6 +26,7 @@ pub mod color;
 mod dither;
 mod lut;
 mod palette;
+mod pipeline;
 
 #[cfg(any(test, feature = "test-util"))]
 pub mod test_util;
@@ -32,3 +38,4 @@ pub use dither::{
 };
 pub use lut::{LUT_SIZE, NearestLut, nearest_oklab};
 pub use palette::{CGA_RGB, CgaColor, FourColor, Intensity, Palette, PaletteError, Preset, Rgb};
+pub use pipeline::{DitherSettings, PaletteChoice, PreAdjust, Renderer, box_downscale, render};
