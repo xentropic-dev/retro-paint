@@ -4297,10 +4297,8 @@ dependencies = [
 name = "retro-paint"
 version = "0.1.0"
 dependencies = [
- "rp-doc",
  "rp-dos",
  "rp-editor",
- "rp-palette-dither",
 ]
 
 [[package]]

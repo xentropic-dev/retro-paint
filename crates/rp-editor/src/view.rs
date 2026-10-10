@@ -10,10 +10,10 @@ use gpui::{
 use rp_doc::Tool;
 use rp_palette_dither::Rgb;
 
-use crate::FrameSink;
 use crate::canvas_view::{self, CanvasCache};
 use crate::filter_panel::FilterPanel;
 use crate::layers_panel::LayersPanel;
+use crate::render_worker::{Overlay, RenderJob, Request, WorkerClient, next_request};
 use crate::state::{EditorState, FileCommand, Outcome, ViewCommand, shortcut_label, tool_label};
 use crate::viewport::Vec2;
 
@@ -89,31 +89,52 @@ pub(crate) struct EditorView {
     layers_panel: Entity<LayersPanel>,
     filter_panel: Entity<FilterPanel>,
     focus: FocusHandle,
-    pub(crate) tick: u32,
-    sink: FrameSink,
+    worker: WorkerClient,
+    /// What the render worker was last given: document version and overlay.
+    sent: Option<(u64, Overlay)>,
     canvas_cache: CanvasCache,
     /// Window position of the canvas area's top-left corner (last layout).
     canvas_origin: Point<Pixels>,
 }
 
 impl EditorView {
-    pub(crate) fn new(sink: FrameSink, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(worker: WorkerClient, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         let state = cx.new(|_| EditorState::new());
-        cx.observe(&state, |_, _, cx| cx.notify()).detach();
+        cx.observe(&state, |this, _, cx| {
+            this.sync_worker(cx);
+            cx.notify();
+        })
+        .detach();
         let layers_panel = cx.new(|cx| LayersPanel::new(state.clone(), window, cx));
         let filter_panel = cx.new(|cx| FilterPanel::new(state.clone(), cx));
-        Self {
+        let mut this = Self {
             state,
             layers_panel,
             filter_panel,
             focus,
-            tick: 0,
-            sink,
+            worker,
+            sent: None,
             canvas_cache: CanvasCache::default(),
             canvas_origin: point(px(0.), px(0.)),
+        };
+        this.sync_worker(cx);
+        this
+    }
+
+    /// Hands the render worker whatever changed since the last call: a
+    /// document snapshot when [`EditorState::doc_version`] moved (re-dither),
+    /// else just the overlay when cursor, tool or colors moved. Never blocks.
+    fn sync_worker(&mut self, cx: &mut Context<Self>) {
+        let state = self.state.read(cx);
+        let overlay = Overlay::from_state(state);
+        match next_request(self.sent, state.doc_version, &overlay) {
+            Request::Render => self.worker.render(RenderJob::from_state(state), overlay),
+            Request::Overlay => self.worker.overlay(overlay),
+            Request::Nothing => return,
         }
+        self.sent = Some((state.doc_version, overlay));
     }
 
     /// Window position → canvas-area (viewport screen) coordinates.
@@ -122,16 +143,6 @@ impl EditorView {
             f32::from(p.x - self.canvas_origin.x),
             f32::from(p.y - self.canvas_origin.y),
         )
-    }
-
-    /// Advances the DOS test pattern (kept until the render worker exists).
-    pub(crate) fn step(&mut self) {
-        self.tick = self.tick.wrapping_add(1);
-        (self.sink)(
-            crate::PATTERN_W,
-            crate::PATTERN_H,
-            crate::test_pattern(self.tick),
-        );
     }
 
     /// Runs `f` on the shared state and redraws every view that shows it.

@@ -4,6 +4,8 @@
 //! key binding to [`EditorState::dispatch`]. Commands that the `file-ops`
 //! feature will implement return [`Outcome::NotImplemented`] for now.
 
+use std::sync::Arc;
+
 use rp_doc::{Document, Layer, LayerId, LayerKind, RgbaImage, Size, SourceStore, Tool};
 
 use crate::filter_ops::PaletteMemory;
@@ -147,8 +149,9 @@ pub struct EditorState {
     pub file_menu_open: bool,
     /// One-line message for the status bar.
     pub status: String,
-    /// Decoded image-layer sources for [`Document::flatten`].
-    pub sources: SourceStore,
+    /// Decoded image-layer sources for [`Document::flatten`]. Shared with
+    /// the render worker's snapshots; mutate through `Arc::make_mut`.
+    pub sources: Arc<SourceStore>,
     /// Bumped whenever the document's pixels may have changed; the view
     /// re-flattens only when this differs from what it last drew.
     pub doc_version: u64,
@@ -192,7 +195,7 @@ impl EditorState {
             tool: Tool::default(),
             file_menu_open: false,
             status: "Ready".into(),
-            sources: SourceStore::new(),
+            sources: Arc::new(SourceStore::new()),
             doc_version: 0,
             viewport: Viewport::new(s.width, s.height),
             auto_fit: true,
