@@ -47,6 +47,6 @@ The `spike-two-windows` spike confirmed this works on Hyprland/Wayland: both win
 
 ## Window placement
 
-Each window sets its own Wayland app_id: `retro-paint-editor` and `retro-paint-dos`. The repo ships a sample Hyprland config snippet with window rules that put the editor on the left monitor and the DOS view on the vertical right monitor, at the right size.
+Each window sets its own Wayland app_id: `retro-paint-editor` and `retro-paint-dos`. The repo ships a sample Hyprland config snippet, [contrib/hyprland.conf](../contrib/hyprland.conf) (see [contrib/README.md](../contrib/README.md)), with window rules that put the editor on the left monitor and the DOS view on the vertical right monitor, at the right size.
 
 The mobile or desktop DOS layout is a per-project setting (saved in the project file). Switching it resizes the DOS window to 9:16 or 16:9.
