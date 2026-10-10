@@ -59,6 +59,16 @@ retro-paint can export a final rasterized render to PNG.
 - **Size:** the project's output resolution by default, with a 1×–8× nearest-neighbor integer upscale option. Pixels stay square, and the output still contains only palette colors.
 - **Optional: flattened full-color image.** A checkbox also exports the full-color composition before dithering.
 
+### Decisions
+
+Implemented in `crates/rp-format` (`export_png`, `encode_dithered_png`).
+
+- **Same render as the live view.** Export runs `Document::flatten` then `rp_palette_dither::render` (or a `Renderer`, same output) at the output resolution. There is no separate dither path.
+- **Dithered file is a 4-bit indexed PNG.** Its `PLTE` holds the active palette's colors in palette order: all 16 for the full palette, 4 for a 4-color mode, or the custom subset. No `tRNS`; every pixel is opaque. The file cannot contain a non-palette color, and decoding it gives exactly the palette RGB values.
+- **Scale** is an integer `1..=8`. Each output pixel becomes an exact `s×s` block, so the file is `output × s` pixels. Any other value is `FormatError::InvalidScale` and nothing is written.
+- **Full-color file** is written next to the dithered one as `<stem>-full.png` (`foo.png` → `foo-full.png`). It is the flattened canvas at **canvas** resolution (not upscaled), RGBA8 with straight alpha, byte-equal to `flatten`.
+- **Writes are atomic**, like project saves: temp file, fsync, rename. Both PNGs are encoded in memory before either is written.
+
 ## File menu
 
 Saving, opening, and exporting are done from the File menu. See [Aesthetics](aesthetics.md).

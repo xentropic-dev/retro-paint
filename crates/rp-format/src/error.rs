@@ -41,6 +41,8 @@ pub enum FormatError {
     MissingSource(SourceHash),
     /// Saving: a float field is NaN or infinite, which JSON cannot hold.
     NonFinite { field: String },
+    /// Export: the upscale factor is not in `1..=8`.
+    InvalidScale(u8),
 }
 
 impl fmt::Display for FormatError {
@@ -74,6 +76,9 @@ impl fmt::Display for FormatError {
             }
             FormatError::NonFinite { field } => {
                 write!(f, "`{field}` is not a finite number")
+            }
+            FormatError::InvalidScale(s) => {
+                write!(f, "export scale {s}× is out of range; use 1× to 8×")
             }
         }
     }

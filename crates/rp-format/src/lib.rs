@@ -19,12 +19,16 @@
 //! - Sources are named by [`source_hash`] (SHA-256 of size + RGBA pixels).
 //!   Both save and load check that pixels match their hash.
 //!
+//! - [`export_png`] writes the dithered output (and optionally the
+//!   flattened full-color image) as PNG; see [`ExportOptions`].
+//!
 //! All PNGs are lossless RGBA8 / Gray8 with straight alpha, so save → load
 //! gives back identical pixels, and rendering the loaded document gives
 //! byte-identical dithered output. Layer ids are not stored; loading assigns
 //! fresh ones in stack order.
 
 mod error;
+mod export;
 mod hash;
 mod image_io;
 mod manifest;
@@ -40,6 +44,11 @@ use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 pub use error::FormatError;
+pub use export::{
+    ExportOptions, ExportReport, MAX_EXPORT_SCALE, check_scale, encode_dithered_png,
+    encode_full_color_png, export_png, export_png_with, full_color_path, render_document,
+    upscale_nearest,
+};
 pub use hash::source_hash;
 pub use migrate::{FORMAT_VERSION, migrate};
 
@@ -107,13 +116,22 @@ pub fn save_to_path(
     sources: &SourceStore,
     path: impl AsRef<Path>,
 ) -> Result<(), FormatError> {
-    let path = path.as_ref();
+    write_atomically(path.as_ref(), |file| save(doc, sources, file))
+}
+
+/// Writes `path` atomically: `write` fills `<path>.tmp` beside it, which is
+/// synced and renamed over `path`. On error the temp file is removed and
+/// any existing file at `path` is untouched.
+pub(crate) fn write_atomically(
+    path: &Path,
+    write: impl FnOnce(&mut fs::File) -> Result<(), FormatError>,
+) -> Result<(), FormatError> {
     let mut tmp_name = path.file_name().unwrap_or_default().to_os_string();
     tmp_name.push(".tmp");
     let tmp = path.with_file_name(tmp_name);
     let result = (|| {
         let mut file = fs::File::create(&tmp)?;
-        save(doc, sources, &mut file)?;
+        write(&mut file)?;
         file.sync_all()?;
         drop(file);
         fs::rename(&tmp, path)?;
