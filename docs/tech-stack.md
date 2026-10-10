@@ -33,6 +33,8 @@ The `spike-two-windows` spike confirmed this works on Hyprland/Wayland: both win
 
 **DOS window app_id.** raylib's `InitWindow` calls `glfwDefaultWindowHints()` just before creating the window, so a `GLFW_WAYLAND_APP_ID` hint set beforehand is lost. `rp-dos` defines `__wrap_glfwDefaultWindowHints`, which calls the real function and then sets the Wayland app_id and X11 class. Every binary that links `rp-dos` must pass `-Wl,--wrap=glfwDefaultWindowHints`; the `build.rs` of `rp-dos` (for its tests) and `retro-paint` emit it.
 
+**Shutdown.** `rp_dos::run_window(rx, stop)` runs until its `StopSignal` fires or its window is closed. When the editor quits (ctrl-q or closing the editor window), `rp_editor::run` returns; `retro-paint` then fires the stop signal, joins the `dos-view` thread (which closes the DOS window within a frame; it waits at most 2 s), and exits. Closing the DOS window first only ends the view: the editor keeps running and its frames are dropped.
+
 ## Data flow between views
 
 1. On each document change, the editor flattens the layers, downscales to output resolution, and dithers on the CPU (off the UI thread). The result is an indexed image at output resolution, one palette index per pixel.
@@ -49,4 +51,4 @@ The `spike-two-windows` spike confirmed this works on Hyprland/Wayland: both win
 
 Each window sets its own Wayland app_id: `retro-paint-editor` and `retro-paint-dos`. The repo ships a sample Hyprland config snippet, [contrib/hyprland.conf](../contrib/hyprland.conf) (see [contrib/README.md](../contrib/README.md)), with window rules that put the editor on the left monitor and the DOS view on the vertical right monitor, at the right size.
 
-The mobile or desktop DOS layout is a per-project setting (saved in the project file). Switching it resizes the DOS window to 9:16 or 16:9.
+The mobile or desktop DOS layout is a per-project setting (saved in the project file). Switching it resizes the DOS window to 9:16 or 16:9. The DOS window asks for 540×960 (mobile) or 960×540 (desktop) when it opens and whenever `FrameMsg.layout` changes, and resets the canvas scroll; a tiling compositor may override the size; placement and size on Hyprland come from the window rules in `contrib/hyprland.conf`.

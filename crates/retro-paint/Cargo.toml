@@ -8,3 +8,4 @@ license.workspace = true
 rp-editor.workspace = true
 rp-dos.workspace = true
 rp-doc.workspace = true
+rp-palette-dither.workspace = true

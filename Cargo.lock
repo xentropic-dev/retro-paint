@@ -4288,6 +4288,7 @@ dependencies = [
  "rp-doc",
  "rp-dos",
  "rp-editor",
+ "rp-palette-dither",
 ]
 
 [[package]]

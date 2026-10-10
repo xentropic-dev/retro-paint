@@ -73,13 +73,18 @@ impl IndexedScreen {
 
     /// Packed RGBA8 (opaque), for textures and PNGs.
     pub fn to_rgba(&self) -> Vec<u8> {
-        self.pixels
-            .iter()
-            .flat_map(|c| {
-                let [r, g, b] = c.rgb().to_array();
-                [r, g, b, 0xFF]
-            })
-            .collect()
+        let mut out = Vec::new();
+        self.write_rgba(&mut out);
+        out
+    }
+
+    /// Like [`to_rgba`](Self::to_rgba), reusing `out`'s allocation.
+    pub fn write_rgba(&self, out: &mut Vec<u8>) {
+        out.clear();
+        out.extend(self.pixels.iter().flat_map(|c| {
+            let [r, g, b] = c.rgb().to_array();
+            [r, g, b, 0xFF]
+        }));
     }
 
     /// Packed RGB8.

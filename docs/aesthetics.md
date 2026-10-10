@@ -72,6 +72,7 @@ Navigation:
 
 - Looks like a complete retro DOS CGA paint app, with its own toolbars and a canvas window around the image.
 - Toolbars are a Deluxe Paint-style tool strip and a CGA palette strip. They are display-only and mirror the native editor's state, highlighting the active tool and color so viewers see tool changes happen. The DOS window does not accept input.
+- Before the editor's first frame, it shows the DOS screen with an empty (black) canvas in the mobile layout. After that it always shows the newest frame and keeps the last one when nothing new arrives.
 - Shows a retro version of the user's cursor, mirroring what is done in the full-color view. The cursor changes with the active tool: a classic DOS arrow for select and move, and a crosshair or brush outline for painting. It is drawn in palette colors at DOS screen resolution, so it goes through the CRT shader too.
 
 ### Screen resolution and tube
