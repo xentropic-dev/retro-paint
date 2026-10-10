@@ -1,0 +1,10 @@
+[package]
+name = "retro-paint"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rp-editor.workspace = true
+rp-dos.workspace = true
+rp-doc.workspace = true

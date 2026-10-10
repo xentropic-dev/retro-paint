@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+rp-palette-dither = { path = "crates/rp-palette-dither" }
+rp-doc = { path = "crates/rp-doc" }
+rp-format = { path = "crates/rp-format" }
+rp-brush = { path = "crates/rp-brush" }
+rp-dos = { path = "crates/rp-dos" }
+rp-editor = { path = "crates/rp-editor" }
+# gpui (Zed git, pinned rev) and raylib 5.x are added by the spike-two-windows feature.
