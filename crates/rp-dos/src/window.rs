@@ -4,7 +4,9 @@ use std::ffi::{c_char, c_int};
 
 use raylib::prelude::*;
 
-use crate::{CGA, FrameReceiver, fit_integer_scale, indexed_to_rgba};
+use rp_palette_dither::CGA_RGB;
+
+use crate::{FrameReceiver, fit_integer_scale, indexed_to_rgba};
 
 /// Width and height of the spike's indexed screen (mobile layout).
 const SCREEN: (i32, i32) = (200, 320);
@@ -29,7 +31,7 @@ pub fn run_window(rx: FrameReceiver) {
         if let Some(frame) = rx.try_recv()
             && (frame.width as i32, frame.height as i32) == SCREEN
         {
-            indexed_to_rgba(&frame.pixels, &CGA, &mut rgba);
+            indexed_to_rgba(&frame.pixels, &CGA_RGB, &mut rgba);
             texture.update_texture(&rgba).expect("upload DOS frame");
         }
         let (x, y, w, h) =

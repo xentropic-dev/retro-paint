@@ -18,9 +18,10 @@ pub const APP_ID: &str = "retro-paint-editor";
 pub const PATTERN_W: u32 = 200;
 pub const PATTERN_H: u32 = 320;
 const SQUARE: u32 = 32;
-const BACKGROUND: u8 = 1;
-const BORDER: u8 = 15;
-const SQUARE_COLOR: u8 = 14;
+// Doc-order CGA indices (rp_palette_dither::CGA_RGB).
+const BACKGROUND: u8 = 4; // blue
+const BORDER: u8 = 3; // white
+const SQUARE_COLOR: u8 = 15; // yellow
 
 /// Bounces 0..=max back and forth, `speed` pixels per tick.
 fn bounce(tick: u32, speed: u32, max: u32) -> u32 {

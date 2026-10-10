@@ -6,6 +6,8 @@
 
 use std::sync::{Arc, Mutex};
 
+use rp_palette_dither::Rgb;
+
 mod window;
 
 pub use window::run_window;
@@ -20,26 +22,6 @@ pub struct FrameMsg {
     pub height: u32,
     pub pixels: Vec<u8>,
 }
-
-/// The 16 CGA colors as RGB. Temporary until `rp-palette-dither` owns it.
-pub const CGA: [[u8; 3]; 16] = [
-    [0x00, 0x00, 0x00],
-    [0x00, 0x00, 0xAA],
-    [0x00, 0xAA, 0x00],
-    [0x00, 0xAA, 0xAA],
-    [0xAA, 0x00, 0x00],
-    [0xAA, 0x00, 0xAA],
-    [0xAA, 0x55, 0x00],
-    [0xAA, 0xAA, 0xAA],
-    [0x55, 0x55, 0x55],
-    [0x55, 0x55, 0xFF],
-    [0x55, 0xFF, 0x55],
-    [0x55, 0xFF, 0xFF],
-    [0xFF, 0x55, 0x55],
-    [0xFF, 0x55, 0xFF],
-    [0xFF, 0xFF, 0x55],
-    [0xFF, 0xFF, 0xFF],
-];
 
 /// Sending half of a latest-only channel. Sending replaces any unread frame.
 #[derive(Clone)]
@@ -68,10 +50,10 @@ impl FrameReceiver {
 }
 
 /// Expands indexed pixels to RGBA8 through `palette`. Out-of-range indices draw black.
-pub fn indexed_to_rgba(pixels: &[u8], palette: &[[u8; 3]], out: &mut Vec<u8>) {
+pub fn indexed_to_rgba(pixels: &[u8], palette: &[Rgb], out: &mut Vec<u8>) {
     out.clear();
     out.extend(pixels.iter().flat_map(|&i| {
-        let [r, g, b] = palette.get(i as usize).copied().unwrap_or([0, 0, 0]);
+        let [r, g, b] = palette.get(i as usize).map_or([0, 0, 0], |c| c.to_array());
         [r, g, b, 0xFF]
     }));
 }
@@ -87,6 +69,7 @@ pub fn fit_integer_scale(src: (i32, i32), dst: (i32, i32)) -> (i32, i32, i32, i3
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rp_palette_dither::CGA_RGB;
 
     fn frame(fill: u8) -> FrameMsg {
         FrameMsg {
@@ -118,11 +101,11 @@ mod tests {
     #[test]
     fn indexed_to_rgba_looks_up_cga() {
         let mut out = Vec::new();
-        indexed_to_rgba(&[0, 9, 15, 200], &CGA, &mut out);
+        indexed_to_rgba(&[0, 5, 15, 200], &CGA_RGB, &mut out);
         assert_eq!(
             out,
             [
-                0, 0, 0, 255, 0x55, 0x55, 0xFF, 255, 255, 255, 255, 255, 0, 0, 0, 255
+                0, 0, 0, 255, 0x55, 0x55, 0xFF, 255, 0xFF, 0xFF, 0x55, 255, 0, 0, 0, 255
             ]
         );
     }
