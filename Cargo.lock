@@ -4329,6 +4329,7 @@ dependencies = [
 name = "rp-dos"
 version = "0.1.0"
 dependencies = [
+ "png 0.18.1",
  "raylib",
  "rp-doc",
  "rp-palette-dither",

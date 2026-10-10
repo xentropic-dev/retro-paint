@@ -8,3 +8,7 @@ license.workspace = true
 rp-doc.workspace = true
 rp-palette-dither.workspace = true
 raylib.workspace = true
+
+[dev-dependencies]
+png = "0.18"
+rp-palette-dither = { workspace = true, features = ["test-util"] }

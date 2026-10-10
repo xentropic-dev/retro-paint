@@ -1,15 +1,27 @@
 //! The DOS view: screen composer, raylib window, and CRT shader.
 //!
-//! Spike state: a temporary [`FrameMsg`], a latest-only channel, and a raylib
-//! window that draws the indexed frame through the CGA palette with
-//! nearest-neighbor integer scaling. `rp-doc` will own the real `FrameMsg`.
+//! The composer ([`compose`]) is pure: it turns an [`rp_doc::FrameMsg`] into
+//! the indexed 320×200 / 200×320 DOS screen. See docs/aesthetics.md.
+//!
+//! Spike state: the window still takes a temporary [`FrameMsg`] over a
+//! latest-only channel and draws the indexed frame through the CGA palette
+//! with nearest-neighbor integer scaling; `dos-window` switches it to
+//! `rp_doc::FrameMsg` + [`compose`] + CRT.
 
 use std::sync::{Arc, Mutex};
 
 use rp_palette_dither::Rgb;
 
+mod compose;
+mod glyphs;
+pub mod sample;
+mod screen;
+mod scroll;
 mod window;
 
+pub use compose::{canvas_viewport, compose};
+pub use screen::{IndexedScreen, Rect};
+pub use scroll::{SCROLL_MARGIN, ScrollState};
 pub use window::run_window;
 
 /// Wayland app_id (and X11 class) of the DOS window.
