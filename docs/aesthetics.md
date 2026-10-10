@@ -53,6 +53,14 @@ Top of the right-hand panel column. The list shows the top of the stack at the t
 - **Add mask** creates an all-white (fully showing) canvas-sized grayscale mask.
 - A new or opened document selects its top layer.
 
+### Painting
+
+- **Brush** paints the selected paint layer: the left button paints the foreground color, the right button the background color. **Eraser** lowers alpha with the same brush (either button). **Picker** sets the foreground (left) or background (right) to the flattened color under the cursor, as the canvas shows it; fully transparent pixels are not picked.
+- The default brush is a built-in round brush with a **Hard / Soft** toggle in the ribbon. Size is 1–256 canvas pixels: the ribbon's −/+ stepper or `[` / `]` step through 1–10, then by 5 to 50, by 10 to 100, by 25 to 250, then 256.
+- Dabs are spaced along the pointer path at the brush's spacing, so fast strokes stay continuous. Strokes follow the layer's offset and are clipped to the layer.
+- Locked layers and image layers refuse strokes; the status bar says why.
+- The DOS cursor's brush outline is the brush size in output pixels (size × output / canvas).
+
 ## Canvas, output, and screen resolutions
 
 Three separate sizes are involved:
