@@ -5,3 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+
+[features]
+# Exports `test_util::assert_palette_only` for other crates' tests.
+test-util = []
