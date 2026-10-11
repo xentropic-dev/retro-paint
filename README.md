@@ -50,6 +50,7 @@ All shortcuts go to the editor window.
 | Ctrl+N | New document (800×1280 canvas, mobile layout, output ÷ 4) |
 | Ctrl+O | Open a `.rpaint` project |
 | Ctrl+I | Insert image(s) as new layers |
+| Ctrl+V | Paste an image (or copied image files) as new layers |
 | Ctrl+S / Ctrl+Shift+S | Save / Save As |
 | Ctrl+E | Export PNG |
 | Ctrl+Shift+P | Project Settings |

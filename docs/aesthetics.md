@@ -35,7 +35,7 @@ The editor and DOS view are always two separate OS windows. With one screen, the
 
 ## Full-color view (left)
 
-- File and Edit menus at the top. File: New (Ctrl+N), Open… (Ctrl+O), Insert Image… (Ctrl+I), Save (Ctrl+S), Save As… (Ctrl+Shift+S), Export PNG… (Ctrl+E), see [File Format](file-format.md); Project Settings… (Ctrl+Shift+P), see [Canvas, output, and screen resolutions](#canvas-output-and-screen-resolutions); Quit (Ctrl+Q). Edit: Undo (Ctrl+Z), Redo (Ctrl+Shift+Z or Ctrl+Y), see [Undo and redo](#undo-and-redo).
+- File and Edit menus at the top. File: New (Ctrl+N), Open… (Ctrl+O), Insert Image… (Ctrl+I), Save (Ctrl+S), Save As… (Ctrl+Shift+S), Export PNG… (Ctrl+E), see [File Format](file-format.md); Project Settings… (Ctrl+Shift+P), see [Canvas, output, and screen resolutions](#canvas-output-and-screen-resolutions); Quit (Ctrl+Q). Edit: Undo (Ctrl+Z), Redo (Ctrl+Shift+Z or Ctrl+Y), see [Undo and redo](#undo-and-redo); Paste (Ctrl+V), see [Inserting images](#inserting-images).
 - Toolbar ribbon at the top.
 - Full set of tools.
 - Layer selection panel, inspired by GIMP or Photoshop.
@@ -60,10 +60,11 @@ Top of the right-hand panel column. The list shows the top of the stack at the t
 
 ### Inserting images
 
-- **File > Insert Image…** (Ctrl+I), the Layers panel's **Image** button, or dropping files from a file manager onto the canvas. The dialog is the desktop's file chooser (XDG portal) and allows several files; each becomes its own layer, in order.
+- **File > Insert Image…** (Ctrl+I), the ribbon's **Insert Image** button (right of the tools), the Layers panel's **Image** button, or dropping files from a file manager onto the canvas. The dialog is the desktop's file chooser (XDG portal) and allows several files; each becomes its own layer, in order.
 - PNG, JPEG and WebP are read by content, not extension, as RGBA8 with straight alpha; the EXIF orientation is applied so the picture is upright. Decoding runs off the UI thread; the status bar shows `Loading <file>…`, then the result or why it failed (unreadable, unsupported format, corrupt, too large).
 - The new image layer goes directly above the selected layer, is named after the file stem, and becomes selected. It is centered on the canvas at 1:1 on whole pixels; an image larger than the canvas is scaled down uniformly to fit inside it, never up.
 - The source is kept at full resolution under its `rp_format::source_hash`; inserting the same picture again reuses the stored source.
+- **Edit > Paste** (Ctrl+V) inserts from the Wayland clipboard the same way: image data (PNG first, then JPEG, WebP, other raster types) becomes a layer named "Pasted image"; copied files (`text/uri-list`, or text that is only `file://` URIs or absolute paths of existing files) insert those files, named after their stems. Anything else shows "Clipboard has no image". The clipboard is read through GPUI; when that yields no image or file list (GPUI prefers text and skips `text/uri-list`), `wl-paste` is asked off the UI thread. Paste does nothing while a dialog is open. Each pasted image is one undo step.
 
 ### Moving and transforming
 
