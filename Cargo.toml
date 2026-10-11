@@ -9,11 +9,26 @@ license = "MIT"
 
 # Dev builds optimize third-party crates (GPUI, raylib, image codecs, zip,
 # ...) so debug builds start and paint at a usable speed, and keep only line
-# tables for them so test binaries link faster. Workspace crates stay at
-# opt-level 0 with full debug info and rebuild as quickly as before.
+# tables for them so test binaries link faster.
 [profile.dev.package."*"]
 opt-level = 2
 debug = "line-tables-only"
+
+# The pixel hot paths (flatten, dither, brush stamping, canvas upload) run
+# ~20x slower unoptimized, which makes painting lag, so debug builds
+# optimize the workspace crates that hold them too. The binary and rp-format
+# stay at opt-level 0.
+[profile.dev.package.rp-palette-dither]
+opt-level = 3
+
+[profile.dev.package.rp-doc]
+opt-level = 3
+
+[profile.dev.package.rp-brush]
+opt-level = 3
+
+[profile.dev.package.rp-editor]
+opt-level = 2
 
 [workspace.dependencies]
 rp-palette-dither = { path = "crates/rp-palette-dither" }
