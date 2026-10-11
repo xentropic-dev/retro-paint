@@ -73,7 +73,7 @@ All shortcuts go to the editor window.
 | Shift / Alt at the start of a selection | Add to / subtract from the selection |
 | Shift during a Rect Select drag | Square the rectangle |
 | Enter / Escape (Lasso) | Close / cancel the outline being drawn |
-| `[` / `]` | Brush size down / up |
+| `[` / `]` | Brush size down / up (round brushes 1–256 px, library brushes 1–1024 px) |
 | `X` | Swap foreground and background colors |
 | `D` | Reset colors to black on white |
 | Arrows / Shift+arrows | Nudge the selected layer 1 px / 10 px (Move or Select tool) |
@@ -86,7 +86,7 @@ All shortcuts go to the editor window.
 
 `[`, `]`, `X`, `D` and the tool letters work only with no Ctrl or Alt held (`X`, `D` and the tool letters also not with Shift), and never while typing a layer name or inside a dialog. Undo and redo do nothing while a dialog is open.
 
-Mouse: with Brush, the left button paints the foreground color and the right button the background color. With Picker, left sets the foreground and right the background. With Rect Select, drag a rectangle. With Lasso, drag a freehand outline (it closes when you let go), or click to place straight segments (drags between clicks add freehand pieces) and finish with a double-click, Enter or a click on the first point. Click the foreground or background chip at the ribbon's right end to open the color picker for it; Swatches' **+ New color…** opens it to make a new swatch. In Swatches, click sets the foreground, right-click the background, middle-click removes the swatch. Double-click a layer to rename it. The ribbon's buttons are icons; hover one to see its name and shortcut.
+Mouse: with Brush, the left button paints the foreground color and the right button the background color. With Picker, left sets the foreground and right the background. With Rect Select, drag a rectangle. With Lasso, drag a freehand outline (it closes when you let go), or click to place straight segments (drags between clicks add freehand pieces) and finish with a double-click, Enter or a click on the first point. Click the foreground or background chip at the ribbon's right end to open the color picker for it; Swatches' **+ New color…** opens it to make a new swatch. In Swatches, click sets the foreground, right-click the background, middle-click removes the swatch. In Brushes, click a thumbnail to paint with that brush; **+ Add brushes…** and **+ Add folder…** load GIMP `.gbr`/`.vbr`/`.gih` and Photoshop `.abr` brushes (or drop files and folders on the section), and the added paths are remembered in `~/.config/retro-paint/brushes.json`. Double-click a layer to rename it. The ribbon's buttons are icons; hover one to see its name and shortcut.
 
 ## Files
 

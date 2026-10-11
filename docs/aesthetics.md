@@ -36,16 +36,16 @@ The editor and DOS view are always two separate OS windows. With one screen, the
 ## Full-color view (left)
 
 - File and Edit menus at the top. File: New (Ctrl+N), Open… (Ctrl+O), Insert Image… (Ctrl+I), Save (Ctrl+S), Save As… (Ctrl+Shift+S), Export PNG… (Ctrl+E), see [File Format](file-format.md); Project Settings… (Ctrl+Shift+P), see [Canvas, output, and screen resolutions](#canvas-output-and-screen-resolutions); Quit (Ctrl+Q). Edit: Undo (Ctrl+Z), Redo (Ctrl+Shift+Z or Ctrl+Y), see [Undo and redo](#undo-and-redo); Paste (Ctrl+V), see [Inserting images](#inserting-images); Duplicate Layer (Ctrl+J), Flip Horizontal, Flip Vertical, Rasterize Layer, see [Layers panel](#layers-panel); Select All (Ctrl+A), Deselect (Ctrl+D), Clear (Delete), see [Selecting](#selecting).
-- Toolbar ribbon at the top, all icon buttons (the File/Edit menus stay words): the tools (Select, Lasso, Rect Select, Move, Brush, Eraser, Picker), Insert Image, the brush size −/+ around the size readout, the Hard/Soft tip toggle, then at the right end the fg/bg chips with swap and reset. Icons are 16×16 one-bit pixel art (a DOS-paint look) drawn as SVG and tinted with the theme's text color (white on the accent fill when selected, dimmed when a size step is at its limit); buttons are 28 px square. Hovering a button shows its name and shortcut, e.g. "Brush (B)". Tool keys, with no modifiers held and not while renaming a layer: `S` Select, `L` Lasso, `R` Rect Select, `M` Move, `B` Brush, `E` Eraser, `I` Picker.
+- Toolbar ribbon at the top, all icon buttons (the File/Edit menus stay words): the tools (Select, Lasso, Rect Select, Move, Brush, Eraser, Picker), Insert Image, the current brush's thumbnail (its name in the tooltip; a click opens the Brushes section), the brush size −/+ around the size readout, the Hard/Soft tip toggle, then at the right end the fg/bg chips with swap and reset. Icons are 16×16 one-bit pixel art (a DOS-paint look) drawn as SVG and tinted with the theme's text color (white on the accent fill when selected, dimmed when a size step is at its limit); buttons are 28 px square. Hovering a button shows its name and shortcut, e.g. "Brush (B)". Tool keys, with no modifiers held and not while renaming a layer: `S` Select, `L` Lasso, `R` Rect Select, `M` Move, `B` Brush, `E` Eraser, `I` Picker.
 - Full set of tools.
 - Layer selection panel, inspired by GIMP or Photoshop.
 - Reorder layers.
 - Insert images.
-- Apply a brush. v1 paints with a built-in round brush (Hard or Soft). `rp-brush` already reads GIMP `.gbr` (bitmap), `.vbr` (parametric) and `.gih` (first cell) brushes and Photoshop `.abr` sampled brushes (v1/v2, v6/v10, with a cheap index pass and on-demand decode), but the editor has no way to load one yet.
+- Apply a brush: the built-in round brush (Hard or Soft), or any brush from the [Brushes section](#brushes): GIMP `.gbr` (bitmap), `.vbr` (parametric) and `.gih` (first cell) brushes and Photoshop `.abr` sampled brushes (v1/v2, v6/v10).
 
 ### Panel column
 
-The right-hand column (260 px wide) holds Layers, Filter and Swatches, top to bottom, each under a clickable header (▼ expanded, ▶ collapsed). Collapsed state is editor-session state: it survives New and Open but is not stored in the document or any file. Everything starts expanded. Sections take their natural height and the column scrolls as a whole when the window is too short; the layer list shows 3 to 8 rows and scrolls past that. The ribbon wraps onto a second line rather than clipping in narrow windows.
+The right-hand column (260 px wide) holds Layers, Filter, Swatches and Brushes, top to bottom, each under a clickable header (▼ expanded, ▶ collapsed). Collapsed state is editor-session state: it survives New and Open but is not stored in the document or any file. Everything starts expanded. Sections take their natural height and the column scrolls as a whole when the window is too short; the layer list shows 3 to 8 rows and scrolls past that. The ribbon wraps onto a second line rather than clipping in narrow windows.
 
 ### Layers panel
 
@@ -108,11 +108,20 @@ Select parts of the canvas with **Rect Select** (`R`) or **Lasso** (`L`), then e
 ### Painting
 
 - **Brush** paints the selected paint layer: the left button paints the foreground color, the right button the background color. **Eraser** lowers alpha with the same brush (either button). **Picker** sets the foreground (left) or background (right) to the flattened color under the cursor, as the canvas shows it; fully transparent pixels are not picked.
-- The default brush is a built-in round brush with a **Hard / Soft** toggle in the ribbon (a solid disc and a dithered disc). Size is 1–256 canvas pixels: the ribbon's −/+ icon buttons or `[` / `]` step through 1–10, then by 5 to 50, by 10 to 100, by 25 to 250, then 256.
+- The default brush is a built-in round brush with a **Hard / Soft** toggle in the ribbon (a solid disc and a dithered disc). The toggle applies to the round brushes only; it is dimmed (and refuses with a status note) while a library brush is selected. Round brushes are 1–256 canvas pixels: the ribbon's −/+ icon buttons or `[` / `]` step through 1–10, then by 5 to 50, by 10 to 100, by 25 to 250, then 256.
+- A sampled (library) brush's size is its longest side in canvas pixels, 1–1024. Selecting one sets the size to its native size, clamped to the canvas's shorter side and to 1024. `[` / `]` step the same ladder and continue past 256: by 50 to 500, by 100 to 1000, then 1024. Library brushes stamp the foreground (left button) or background (right button) through their mask at their own spacing; a color `.gbr`'s own colors are ignored.
 - Dabs are spaced along the pointer path at the brush's spacing, so fast strokes stay continuous. Strokes follow the layer's offset and are clipped to the layer.
 - Locked layers and image layers refuse strokes; the status bar says why (for an image layer it suggests Rasterize).
 - With the mask as the edit target, Brush and Eraser paint the selected layer's mask instead: Brush with the left button paints black (hides), Brush right button and Eraser (either button) paint white (reveal). Each dab moves the mask toward black or white by the brush's coverage, so the soft brush feathers. Masks are canvas-space, so strokes ignore the layer's offset or transform, and image layers' masks paint the same way (their pixels are never touched). A pixel lock does not lock the mask (as in Photoshop). The Picker ignores the target and always picks the flattened color.
-- The DOS cursor's brush outline is the brush size in output pixels (size × output / canvas).
+- The DOS cursor's brush outline is the brush size in output pixels (size × output / canvas); for a library brush that is its longest side.
+
+### Brushes
+
+- The **Brushes** section (bottom of the right column) is a grid of brush thumbnails: the built-in Round Hard and Round Soft first, then every added brush file in the order it loaded, each file's brushes in file order. Click one to select it; the selected cell has an accent border and its tooltip gives the name and native size. Brush, Eraser and mask painting all use the selected brush.
+- **+ Add brushes…** opens the portal file chooser (multi-select) for `.abr`, `.gbr`, `.vbr` and `.gih` files; **+ Add folder…** picks a folder (the portal offers files or folders, not both at once, so there is a button for each). Brush files and folders can also be dropped onto the section. Folders are scanned recursively; only brush files count, so zips and everything else are skipped. A file already in the library (same canonical path) is not added twice.
+- Added paths (files and folders, as picked) are remembered in `$XDG_CONFIG_HOME/retro-paint/brushes.json` (`~/.config/...` by default), a JSON list of paths, and loaded again on the next start. Paths that no longer exist are dropped from the file with a status note.
+- Loading never blocks the UI: files are scanned and indexed on a background thread, entries appear as each file is indexed (an `.abr` pack of 132 brushes, 75 MB, indexes in well under a millisecond), and thumbnails fill in as they are made. Selecting an `.abr` brush reads and decodes just its samples off the UI thread, downscaled to a working copy of at most 1024 px, so size steps never resample the 5000 px original; the last few selected brushes stay decoded.
+- The brush choice is editor state: it survives New and Open and is never saved in a document.
 
 ### Colors and swatches
 

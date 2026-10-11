@@ -2,7 +2,7 @@
 //!
 //! One window: an in-window menu bar (GPUI's native app menu does not render
 //! on Wayland), a tool ribbon, the canvas area, a right-side panel column
-//! (Layers, Filter, Swatches) and a status bar. Logic lives in [`state`];
+//! (Layers, Filter, Swatches, Brushes) and a status bar. Logic lives in [`state`];
 //! the GPUI view is thin.
 //!
 //! The [`render_worker`] flattens and dithers the document off the UI

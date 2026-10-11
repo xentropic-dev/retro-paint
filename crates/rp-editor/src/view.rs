@@ -903,7 +903,7 @@ impl EditorView {
         }
     }
 
-    /// The right-hand column: Layers, Filter and Swatches under collapsible
+    /// The right-hand column: Layers, Filter, Swatches and Brushes under collapsible
     /// headers. Sections take their natural height; the column scrolls.
     fn panels(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let sections = self.state.read(cx).panels;
