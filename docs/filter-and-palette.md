@@ -214,7 +214,7 @@ In `rp-palette-dither` this is `render(rgba, canvas_size, output_size, &DitherSe
 
 v1 has one global set of dither settings, applied once after flattening.
 
-**Next step (planned):** per-layer dither settings. Each layer can override the method, strength, and palette subset, and is dithered before compositing. The UI will let the user choose either mode: global (flatten, then dither) or per-layer. One example use is keeping a flat-color logo layer undithered over a dithered photo background.
+**After v1 (not built):** per-layer dither settings. Each layer can override the method, strength, and palette subset, and is dithered before compositing. The UI will let the user choose either mode: global (flatten, then dither) or per-layer. One example use is keeping a flat-color logo layer undithered over a dithered photo background.
 
 ## Decisions
 

@@ -24,7 +24,7 @@ The DOS view supports two layouts:
 
 ## Multi-monitor layout (default)
 
-The two views can be split across monitors, and this is the planned default:
+The two views can be split across monitors, and this is the default (see `contrib/hyprland.conf`):
 
 - **Left monitor:** the full-color view with the real UI.
 - **Right monitor (vertical):** the DOS view with the filter applied, in the mobile view. The vertical monitor captures well for mobile.
@@ -35,13 +35,13 @@ The editor and DOS view are always two separate OS windows. With one screen, the
 
 ## Full-color view (left)
 
-- File menu at the top (save, open, PNG export, see [File Format](file-format.md); and Project Settings, see [Canvas, output, and screen resolutions](#canvas-output-and-screen-resolutions)).
+- File and Edit menus at the top. File: New (Ctrl+N), Open… (Ctrl+O), Insert Image… (Ctrl+I), Save (Ctrl+S), Save As… (Ctrl+Shift+S), Export PNG… (Ctrl+E), see [File Format](file-format.md); Project Settings… (Ctrl+Shift+P), see [Canvas, output, and screen resolutions](#canvas-output-and-screen-resolutions); Quit (Ctrl+Q). Edit: Undo (Ctrl+Z), Redo (Ctrl+Shift+Z or Ctrl+Y), see [Undo and redo](#undo-and-redo).
 - Toolbar ribbon at the top.
 - Full set of tools.
 - Layer selection panel, inspired by GIMP or Photoshop.
 - Reorder layers.
 - Insert images.
-- Apply a brush. GIMP brushes are supported in `.gbr` (bitmap) and `.vbr` (parametric) formats.
+- Apply a brush. v1 paints with a built-in round brush (Hard or Soft). `rp-brush` already reads GIMP `.gbr` (bitmap) and `.vbr` (parametric) brushes, but the editor has no way to load one yet.
 
 ### Panel column
 
@@ -90,7 +90,7 @@ Top of the right-hand panel column. The list shows the top of the stack at the t
 - **+ Add fg** saves the foreground at the end. A color that is already saved is not duplicated; it moves to the end. A document keeps at most 64 swatches; adding to a full list is refused with a status message (re-adding a saved color still moves it).
 - **− Remove fg** removes the swatch equal to the foreground (pick it first by clicking it); if none matches, the status bar says so.
 - The picker and the swatches are the ways to set a color in v1; there is no RGB/HSV color editor yet.
-- Colors and swatches are stored in the document (see [File Format](file-format.md)) but are not pixel edits: changing them never re-renders or re-dithers (`doc_version` does not move). A foreground change reaches the DOS view as an overlay update of its active color. For undo: swatch add/remove are document edits and should be undoable steps; fg/bg changes (picker, swatch click, swap, reset) are not undo steps, like GIMP.
+- Colors and swatches are stored in the document (see [File Format](file-format.md)) but are not pixel edits: changing them never re-renders or re-dithers (`doc_version` does not move). A foreground change reaches the DOS view as an overlay update of its active color. Swatch add and remove are undo steps; fg/bg changes (picker, swatch click, swap, reset) are not, like GIMP.
 
 ### Undo and redo
 
@@ -123,7 +123,7 @@ Three separate sizes are involved:
 
 Navigation:
 
-- **Native editor:** the canvas can be scrolled and zoomed. It opens fitted to the window (and keeps refitting on resize until you pan or zoom). Zoom runs 12.5%–3200%: ctrl+wheel zooms about the cursor, ctrl+= / ctrl+- step the zoom, ctrl+1 is 100%, ctrl+0 fits. The wheel scrolls; middle-drag or space+drag pans. Transparency shows as a checkerboard on a dark surround, and pixels stay sharp when zoomed in. A new document starts with one opaque white paint layer named "Background".
+- **Native editor:** the canvas can be scrolled and zoomed. It opens fitted to the window (and keeps refitting on resize until you pan or zoom). Zoom runs 12.5%–3200%: ctrl+wheel zooms about the cursor, ctrl+= (also ctrl++ and ctrl+shift+=) / ctrl+- step the zoom, ctrl+1 is 100%, ctrl+0 fits. The wheel scrolls; middle-drag or space+drag pans. Transparency shows as a checkerboard on a dark surround, and pixels stay sharp when zoomed in. A new document starts with one opaque white paint layer named "Background".
 - **DOS app:** the output image can only be scrolled, never zoomed, because it is always shown 1:1 in DOS screen pixels. It auto-scrolls to keep the cursor's position in view, like an old paint program panning as you paint near the edge. It ignores the native editor's zoom level. The window pans when the cursor comes within 16 output pixels of an edge and never scrolls past the image; on an axis where the image is smaller than the window, the image is centered on a dark gray backdrop.
 
 ## DOS view (right)
@@ -144,7 +144,7 @@ The DOS screen is stretched to fill the tube. On desktop, the 4:3 tube gives pix
 
 ### CRT shader
 
-The DOS view is rendered through a CRT post-process shader ported from an earlier Bevy project's `crt.wgsl` (WGSL/Bevy, to be ported to raylib GLSL). The DOS screen is drawn to an offscreen texture, then shown on a fullscreen quad with:
+The DOS view is rendered through a CRT post-process shader ported to raylib GLSL from an earlier Bevy project's `crt.wgsl` (WGSL/Bevy). The DOS screen is drawn to an offscreen texture, then shown on a fullscreen quad with:
 
 - barrel curvature and a black bezel where the tube curves away
 - scanlines matched to the DOS screen's row count

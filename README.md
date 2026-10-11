@@ -49,12 +49,14 @@ All shortcuts go to the editor window.
 |---|---|
 | Ctrl+N | New document (800×1280 canvas, mobile layout, output ÷ 4) |
 | Ctrl+O | Open a `.rpaint` project |
+| Ctrl+I | Insert image(s) as new layers |
 | Ctrl+S / Ctrl+Shift+S | Save / Save As |
 | Ctrl+E | Export PNG |
-| Ctrl+I | Insert image(s) as new layers |
 | Ctrl+Shift+P | Project Settings |
-| Ctrl+Q | Quit |
-| Ctrl+= (or Ctrl++) / Ctrl+- | Zoom in / out |
+| Ctrl+Q | Quit (asks first if there are unsaved changes) |
+| Ctrl+Z | Undo |
+| Ctrl+Shift+Z or Ctrl+Y | Redo |
+| Ctrl+= (also Ctrl++ and Ctrl+Shift+=) / Ctrl+- | Zoom in / out |
 | Ctrl+1 | Zoom to 100% |
 | Ctrl+0 | Fit the canvas to the window |
 | Ctrl+wheel | Zoom about the cursor |
@@ -66,7 +68,11 @@ All shortcuts go to the editor window.
 | Arrows / Shift+arrows | Nudge the selected layer 1 px / 10 px (Move or Select tool) |
 | Shift while scaling | Scale freely instead of keeping the aspect ratio |
 | Shift while rotating | Snap to 15° steps |
-| Enter / Escape | Apply / cancel a layer rename or the Project Settings dialog |
+| Enter / Escape | Apply / cancel a layer rename, Project Settings or the Export dialog |
+| Enter / D / Escape | Save / Don't Save / Cancel in the unsaved-changes prompt |
+| ←/→ or −/+, 1–8, F | Export dialog: scale down/up, set the scale, toggle the full-color file |
+
+`[`, `]`, `X` and `D` work only with no Ctrl or Alt held (`X` and `D` also not with Shift), and never while typing a layer name or inside a dialog. Undo and redo do nothing while a dialog is open.
 
 Mouse: with Brush, the left button paints the foreground color and the right button the background color. With Picker, left sets the foreground and right the background. In Swatches, click sets the foreground, right-click the background, middle-click removes the swatch. Double-click a layer to rename it.
 
