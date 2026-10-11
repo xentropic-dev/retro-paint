@@ -15,6 +15,7 @@ use crate::filter_panel::FilterPanel;
 use crate::insert_flow::{insert_image_files, prompt_insert_image};
 use crate::layers_panel::LayersPanel;
 use crate::paint_ops::{BrushTip, MAX_BRUSH_SIZE, MIN_BRUSH_SIZE, PaintButton};
+use crate::project_dialog::ProjectDialog;
 use crate::render_worker::{
     CanvasReceiver, Overlay, RenderJob, Request, TIMING_ENV, WorkerClient, next_request,
 };
@@ -33,6 +34,7 @@ actions!(
         SaveFile,
         SaveFileAs,
         ExportPng,
+        ProjectSettings,
         Quit,
         ZoomIn,
         ZoomOut,
@@ -52,6 +54,7 @@ pub fn bind_keys(cx: &mut App) {
             FileCommand::Save => KeyBinding::new(k, SaveFile, None),
             FileCommand::SaveAs => KeyBinding::new(k, SaveFileAs, None),
             FileCommand::ExportPng => KeyBinding::new(k, ExportPng, None),
+            FileCommand::ProjectSettings => KeyBinding::new(k, ProjectSettings, None),
             FileCommand::Quit => KeyBinding::new(k, Quit, None),
         }
     }));
@@ -110,6 +113,7 @@ pub(crate) struct EditorView {
     layers_panel: Entity<LayersPanel>,
     filter_panel: Entity<FilterPanel>,
     swatches_panel: Entity<SwatchesPanel>,
+    project_dialog: Entity<ProjectDialog>,
     focus: FocusHandle,
     worker: WorkerClient,
     /// What the render worker was last given: document version and overlay.
@@ -137,11 +141,13 @@ impl EditorView {
         let layers_panel = cx.new(|cx| LayersPanel::new(state.clone(), window, cx));
         let filter_panel = cx.new(|cx| FilterPanel::new(state.clone(), cx));
         let swatches_panel = cx.new(|cx| SwatchesPanel::new(state.clone(), cx));
+        let project_dialog = cx.new(|cx| ProjectDialog::new(state.clone(), focus.clone(), cx));
         let mut this = Self {
             state,
             layers_panel,
             filter_panel,
             swatches_panel,
+            project_dialog,
             focus,
             worker,
             sent: None,
@@ -210,11 +216,17 @@ impl EditorView {
         edit_state(&self.state, cx, f)
     }
 
-    fn run(&mut self, cmd: FileCommand, _window: &mut Window, cx: &mut Context<Self>) {
+    fn run(&mut self, cmd: FileCommand, window: &mut Window, cx: &mut Context<Self>) {
         match self.edit(cx, |s| s.dispatch(cmd)) {
             Outcome::Quit => cx.quit(),
             Outcome::PickImages => prompt_insert_image(&self.state, cx),
             Outcome::Done | Outcome::NotImplemented(_) => {}
+        }
+        if self.state.read(cx).project_dialog.is_some() {
+            self.project_dialog.update(cx, |d, cx| d.focus(window, cx));
+        } else if !self.focus.contains_focused(window, cx) {
+            // New closes the dialog; take focus back from it.
+            window.focus(&self.focus, cx);
         }
     }
 
@@ -236,6 +248,9 @@ impl EditorView {
     }
     fn on_export_png(&mut self, _: &ExportPng, w: &mut Window, cx: &mut Context<Self>) {
         self.run(FileCommand::ExportPng, w, cx);
+    }
+    fn on_project_settings(&mut self, _: &ProjectSettings, w: &mut Window, cx: &mut Context<Self>) {
+        self.run(FileCommand::ProjectSettings, w, cx);
     }
     fn on_quit(&mut self, _: &Quit, w: &mut Window, cx: &mut Context<Self>) {
         self.run(FileCommand::Quit, w, cx);
@@ -773,6 +788,7 @@ pub(crate) fn panel_header(title: &'static str) -> Div {
 impl Render for EditorView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let menu_open = self.state.read(cx).file_menu_open;
+        let dialog_open = self.state.read(cx).project_dialog.is_some();
         div()
             .id("editor")
             .track_focus(&self.focus)
@@ -782,6 +798,7 @@ impl Render for EditorView {
             .on_action(cx.listener(Self::on_save))
             .on_action(cx.listener(Self::on_save_as))
             .on_action(cx.listener(Self::on_export_png))
+            .on_action(cx.listener(Self::on_project_settings))
             .on_action(cx.listener(Self::on_quit))
             .on_action(cx.listener(Self::on_zoom_in))
             .on_action(cx.listener(Self::on_zoom_out))
@@ -831,6 +848,23 @@ impl Render for EditorView {
                         ),
                 )
                 .child(self.file_menu(cx))
+            })
+            .when(dialog_open, |root| {
+                // Modal: the backdrop swallows clicks meant for the editor.
+                root.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .bottom_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .bg(gpui::rgba(0x00000099))
+                        .occlude()
+                        .child(self.project_dialog.clone()),
+                )
             })
     }
 }

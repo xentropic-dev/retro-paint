@@ -11,6 +11,7 @@ use rp_doc::{Document, Layer, LayerId, LayerKind, RgbaImage, Size, SourceStore, 
 use crate::filter_ops::PaletteMemory;
 use crate::layer_ops::RenameEdit;
 use crate::paint_ops::{BrushState, Stroke};
+use crate::project_ops::ProjectDraft;
 use crate::transform_ops::TransformDrag;
 use crate::viewport::{Vec2, Viewport};
 
@@ -29,18 +30,20 @@ pub enum FileCommand {
     Save,
     SaveAs,
     ExportPng,
+    ProjectSettings,
     Quit,
 }
 
 impl FileCommand {
     /// Every command, in File-menu order.
-    pub const ALL: [FileCommand; 7] = [
+    pub const ALL: [FileCommand; 8] = [
         FileCommand::New,
         FileCommand::Open,
         FileCommand::InsertImage,
         FileCommand::Save,
         FileCommand::SaveAs,
         FileCommand::ExportPng,
+        FileCommand::ProjectSettings,
         FileCommand::Quit,
     ];
 
@@ -53,6 +56,7 @@ impl FileCommand {
             FileCommand::Save => "Save",
             FileCommand::SaveAs => "Save As…",
             FileCommand::ExportPng => "Export PNG…",
+            FileCommand::ProjectSettings => "Project Settings…",
             FileCommand::Quit => "Quit",
         }
     }
@@ -66,6 +70,7 @@ impl FileCommand {
             FileCommand::Save => "ctrl-s",
             FileCommand::SaveAs => "ctrl-shift-s",
             FileCommand::ExportPng => "ctrl-e",
+            FileCommand::ProjectSettings => "ctrl-shift-p",
             FileCommand::Quit => "ctrl-q",
         }
     }
@@ -78,6 +83,7 @@ impl FileCommand {
                 | FileCommand::InsertImage
                 | FileCommand::SaveAs
                 | FileCommand::ExportPng
+                | FileCommand::ProjectSettings
         )
     }
 }
@@ -197,6 +203,8 @@ pub struct EditorState {
     /// Whether shift was held at the last pointer or key event (frees the
     /// aspect ratio while scaling, snaps the angle while rotating).
     pub shift_held: bool,
+    /// The Project Settings dialog's draft while it is open.
+    pub project_dialog: Option<ProjectDraft>,
 }
 
 impl Default for EditorState {
@@ -230,6 +238,7 @@ impl EditorState {
             stroke: None,
             transform_drag: None,
             shift_held: false,
+            project_dialog: None,
         }
     }
 
@@ -242,6 +251,7 @@ impl EditorState {
         self.stroke = None;
         self.transform_drag = None;
         self.palette_memory = PaletteMemory::default();
+        self.project_dialog = None;
         self.document = document;
         self.viewport.set_canvas_size(s.width, s.height);
         self.auto_fit = true;
@@ -343,6 +353,10 @@ impl EditorState {
                 self.set_document(new_document());
                 let s = self.document.canvas_size;
                 self.status = format!("New document {}×{}", s.width, s.height);
+                Outcome::Done
+            }
+            FileCommand::ProjectSettings => {
+                self.open_project_settings();
                 Outcome::Done
             }
             FileCommand::Quit => Outcome::Quit,
@@ -495,6 +509,7 @@ mod tests {
                 "ctrl-s",
                 "ctrl-shift-s",
                 "ctrl-e",
+                "ctrl-shift-p",
                 "ctrl-q"
             ]
         );

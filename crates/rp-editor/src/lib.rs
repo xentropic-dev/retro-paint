@@ -20,6 +20,8 @@ mod insert_flow;
 pub mod layer_ops;
 mod layers_panel;
 pub mod paint_ops;
+mod project_dialog;
+pub mod project_ops;
 pub mod render_worker;
 pub mod state;
 pub mod swatch_ops;
