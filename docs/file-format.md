@@ -72,3 +72,15 @@ Implemented in `crates/rp-format` (`export_png`, `encode_dithered_png`).
 ## File menu
 
 Saving, opening, and exporting are done from the File menu. See [Aesthetics](aesthetics.md).
+
+### Decisions
+
+Implemented in `crates/rp-editor` (`file_ops`, `file_flow`, `file_dialog`).
+
+- **Save** (Ctrl+S) writes to the current file; with no file yet it is **Save As…** (Ctrl+Shift+S), the desktop's save dialog (XDG portal) in the project's folder (else home), suggesting `Untitled.rpaint` or the current name. `.rpaint` is added when the chosen name has another or no extension. Saving runs off the UI thread; the status bar shows `Saved <name>.rpaint`.
+- **Open…** (Ctrl+O) is the portal's open dialog. The pinned GPUI has no file-type filter, so any file can be picked; a non-project file is refused with a readable message. Loading runs off the UI thread and replaces the document, its sources and the current file, selects the top layer and refits the view.
+- **Load errors** show in a message box and the status bar. A newer file reads: "`<name>` was saved by a newer retro-paint (format N); this version supports up to format M. Update retro-paint to open it." Other failures say the file is missing, not a project file, or damaged. The open document is kept.
+- **Dirty** means changed since the last save or open: any edit that bumps the document version, or a change to the brush colors or swatches (saved, but not pixel edits). The window title and status bar show `<name>.rpaint •` (or `Untitled •`). A save records the state from when it started, so edits made while it runs stay dirty.
+- **Unsaved changes:** New, Open, Quit (Ctrl+Q) and the window's close button ask *Save / Don't Save / Cancel* when dirty (Enter saves, D doesn't, Escape cancels). Save runs Save (or Save As) and continues only if it succeeds; a cancelled save dialog or a failed save cancels the command.
+- **Export PNG…** (Ctrl+E) opens a dialog: scale 1×–8× (starts from the last export's settings, 1× at first) with the resulting pixel size, and "Also export full-color image" (`<stem>-full.png`, canvas size). Export… then asks for the path with the portal save dialog, suggesting `<project stem>.png` (`Untitled.png`); `.png` is added if missing. Export runs off the UI thread; the status bar lists the files written and their sizes.
+- One file job at a time: while a save, open or export runs, other File commands (and closing the window) wait with a status message. File commands are ignored while a File dialog is open.
