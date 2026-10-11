@@ -139,6 +139,12 @@ impl RgbaImage {
         Arc::ptr_eq(&self.data, &other.data)
     }
 
+    /// Identity of the pixel buffer: equal for clones that share it. Only
+    /// meaningful while some clone keeps the buffer alive.
+    pub(crate) fn buffer_id(&self) -> usize {
+        Arc::as_ptr(&self.data) as usize
+    }
+
     /// The pixel at `(x, y)`. Panics if out of bounds.
     pub fn get(&self, x: u32, y: u32) -> [u8; 4] {
         let i = self.index(x, y);
@@ -224,6 +230,12 @@ impl GrayImage {
     /// [module docs](self)). Equal images need not share.
     pub fn shares_buffer(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.data, &other.data)
+    }
+
+    /// Identity of the pixel buffer: equal for clones that share it. Only
+    /// meaningful while some clone keeps the buffer alive.
+    pub(crate) fn buffer_id(&self) -> usize {
+        Arc::as_ptr(&self.data) as usize
     }
 
     /// The value at `(x, y)`. Panics if out of bounds.

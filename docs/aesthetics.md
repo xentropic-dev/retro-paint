@@ -99,7 +99,7 @@ Top of the right-hand panel column. The list shows the top of the stack at the t
 - Runs of the same control merge into one step while nothing else is recorded in between: one filter slider (bar clicks and −/+ steps; Reset is its own step), one layer's opacity, and arrow-key nudges of one layer.
 - Not steps: fg/bg colors, layer selection, tool, brush, zoom and scroll, panel collapse. Undo and redo keep the current fg/bg.
 - Undo during a stroke or drag finishes it and undoes it; it cancels an inline rename. Undo and redo do nothing while a dialog is open. If the selected layer is gone afterwards, the top layer is selected; a changed canvas size refits the view.
-- The history is bounded by memory, about 512 MiB; the oldest steps are dropped first and the newest one is always kept. Strokes store only the changed rectangle of the layer; other steps keep a copy of the document (image layers only reference their source).
+- The history is bounded by memory, about 512 MiB; the oldest steps are dropped first and the newest one is always kept. Strokes store only the changed rectangle of the layer; other steps keep a copy of the document (image layers only reference their source). Paint rasters and masks are copy-on-write, so unchanged ones are shared between steps and the document, and each shared raster counts once against the budget.
 - New and Open clear the history. Undoing back to the last-saved state makes the document clean again (the • goes away).
 
 ## Canvas, output, and screen resolutions

@@ -331,16 +331,24 @@ fn newest_step_survives_even_over_budget() {
 fn set_budget_evicts_and_memory_counts_paint_pixels() {
     let (mut d, _, _) = doc();
     let big = Size::new(256, 256);
-    d.push_layer(Layer::paint("big", big));
+    let id = d.push_layer(Layer::paint("big", big));
     let mut h = History::new();
     assert_eq!(h.budget(), DEFAULT_BUDGET);
-    for _ in 0..4 {
+    for i in 0..4 {
+        // A whole-layer fill recorded as a snapshot: each step keeps its
+        // own copy of the big raster.
         h.begin_snapshot(&d);
-        d.swatches.push(Rgb::new(1, 1, 1));
-        h.commit(&d);
+        d.layer_mut(id)
+            .unwrap()
+            .pixels_mut()
+            .unwrap()
+            .as_raw_mut()
+            .fill(i + 1);
+        assert!(h.commit(&d));
     }
-    // Every snapshot holds at least the big raster.
-    assert!(h.memory_used() >= 4 * big.area() * 4);
+    let raster = big.area() * 4;
+    assert!(h.memory_used() >= 4 * raster);
+    assert!(h.memory_used() < 5 * raster);
     h.set_budget(2 * big.area() * 4 + 4096);
     assert_eq!(h.undo_len(), 2);
 }
@@ -509,4 +517,93 @@ fn begin_paint_without_writes_records_nothing() {
     assert!(h.begin_paint(&d, paint));
     assert!(!h.commit(&d));
     assert!(!h.can_undo());
+}
+
+/// A document with `n` paint layers, each with its own filled raster.
+fn layered(size: Size, n: u8) -> (Document, Vec<LayerId>) {
+    let mut d = Document::new(size);
+    let ids = (0..n)
+        .map(|i| {
+            let id = d.push_layer(Layer::paint(format!("l{i}"), size));
+            fill_layer(&mut d, id, i + 1);
+            id
+        })
+        .collect();
+    (d, ids)
+}
+
+fn fill_layer(d: &mut Document, id: LayerId, v: u8) {
+    let px = d.layer_mut(id).unwrap().pixels_mut().unwrap();
+    px.as_raw_mut().fill(v);
+}
+
+#[test]
+fn thousand_settings_steps_on_a_big_doc_stay_well_under_budget() {
+    let size = Size::new(800, 1280);
+    let rasters = 4 * size.area() * 4; // 16 MiB
+    let (mut d, _) = layered(size, 4);
+    let original = d.clone();
+    let mut h = History::new();
+    for i in 0..1000u32 {
+        h.begin_snapshot(&d);
+        if i % 2 == 0 {
+            d.swatches.push(Rgb::new(i as u8, (i >> 8) as u8, 0));
+        } else {
+            d.dither.serpentine = !d.dither.serpentine;
+            d.dither.strength = (i % 100) as f32 / 100.0;
+        }
+        assert!(h.commit(&d));
+    }
+    assert_eq!(h.undo_len(), 1000, "nothing evicted");
+    // The rasters once, plus small per-step overhead (swatches grow to 500).
+    let used = h.memory_used();
+    assert!(used >= rasters, "{used}");
+    assert!(used < rasters + 8 * 1024 * 1024, "{used}");
+    assert!(used < DEFAULT_BUDGET / 16, "{used}");
+    while h.undo(&mut d) {}
+    assert_eq!(d, original);
+}
+
+#[test]
+fn paint_heavy_history_still_evicts_within_budget() {
+    let size = Size::new(128, 128);
+    let raster = size.area() * 4; // 64 KiB
+    let (mut d, ids) = layered(size, 4);
+    let budget = 16 * raster;
+    // Charging every snapshot for all four rasters would fit at most this
+    // many snapshot steps.
+    let old_scheme_snapshots = budget / (4 * raster);
+    let mut h = History::with_budget(budget);
+    for i in 0..40u8 {
+        // A whole-layer fill recorded as a snapshot leaves one more
+        // distinct raster in the history.
+        h.begin_snapshot(&d);
+        fill_layer(&mut d, ids[i as usize % 4], 100 + i);
+        assert!(h.commit(&d));
+        assert!(h.memory_used() <= budget, "{}", h.memory_used());
+        // A brush stroke, as a patch. Its copy-on-write copy turns the
+        // snapshot's shared raster into one only the history holds.
+        h.begin_paint(&d, ids[0]);
+        let px = d.layer_mut(ids[0]).unwrap().pixels_mut().unwrap();
+        px.put(1, 1, [i, 0, 0, 255]);
+        assert!(h.commit(&d));
+        assert!(h.memory_used() <= budget, "{}", h.memory_used());
+    }
+    let kept = h.undo_len();
+    assert!(kept < 80, "evicted something");
+    let kept_snapshots = h.undo_len() / 2;
+    assert!(kept_snapshots > old_scheme_snapshots, "kept {kept} steps");
+    // Undo all the way; budget holds throughout. Undo hands the newer
+    // rasters to redo steps, which can evict a few of the oldest steps.
+    let mut n = 0;
+    while h.undo(&mut d) {
+        n += 1;
+        assert!(h.memory_used() <= budget, "{}", h.memory_used());
+    }
+    assert!(n > 0 && n <= kept, "{n} of {kept}");
+    while h.redo(&mut d) {
+        assert!(h.memory_used() <= budget, "{}", h.memory_used());
+    }
+    assert_eq!(paint_pixels(&d, ids[39 % 4]).get(5, 5), [139; 4]);
+    assert_eq!(paint_pixels(&d, ids[0]).get(1, 1), [39, 0, 0, 255]);
 }

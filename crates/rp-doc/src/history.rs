@@ -63,24 +63,42 @@
 //!
 //! # Memory
 //!
-//! Every stored step is counted ([`History::memory_used`]): pixel and mask
-//! bytes, swatches, names, plus fixed overhead. After each push, undo or redo
-//! the oldest undo steps are evicted until the total is within the budget
-//! ([`DEFAULT_BUDGET`], 512 MiB, see [`History::with_budget`]). The redo
-//! stack is never evicted, and the newest undo step is kept even if it alone
-//! is over budget, so the last edit can always be undone. The open
-//! `begin`/`commit` state is transient and not counted.
+//! [`History::memory_used`] is the memory the undo and redo stacks keep
+//! reachable: every step's own bytes (patch pixels, swatches, names, fixed
+//! overhead) plus every **distinct** paint raster and mask buffer the
+//! stacks hold, each counted once however many steps share it. After each
+//! push, undo or redo the oldest undo steps are evicted until the total is
+//! within the budget ([`DEFAULT_BUDGET`], 512 MiB, see
+//! [`History::with_budget`]). The redo stack is never evicted, and the
+//! newest undo step is kept even if it alone is over budget, so the last
+//! edit can always be undone. The open `begin`/`commit` state is transient
+//! and not counted.
 //!
-//! Shared rasters are counted **once per snapshot that holds them**, not
-//! once overall. That makes [`History::memory_used`] an upper bound on the
-//! memory really held (a run of snapshots that only changed settings shares
-//! one copy of each raster but is counted as N), and it keeps each step's
-//! size fixed while it sits in a stack, which the running total and eviction
-//! rely on: how much is shared changes as the document is edited, and a
-//! step's charge must not change under it. The cost is that the budget can
-//! evict earlier than strictly needed; it can never let real use exceed it.
+//! Rasters are copy-on-write, so a run of snapshots that only changed
+//! settings (swatches, filter, opacity, ...) shares one copy of each raster.
+//! The history keeps a refcount table keyed by buffer identity (the `Arc`
+//! pointer): a buffer is charged when the first step holding it enters a
+//! stack and released when the last one leaves (eviction, redo
+//! invalidation, [`History::clear`], or an undo/redo swap that hands the
+//! buffer back to the document). The key is safe because a buffer in the
+//! table is kept alive by a step, so its address cannot be reused. A
+//! buffer's charge depends only on the stacks, never on the document, so
+//! the running total stays exact while the document is edited.
+//!
+//! Buffers a step shares with the **live document** are still charged. The
+//! alternative (charge only bytes the history holds exclusively) would let
+//! the charge go stale without the history noticing: when the document
+//! paints a shared raster it copies it (copy-on-write) and the history's
+//! old buffer silently becomes exclusive memory. Charging them keeps
+//! `memory_used` an upper bound on the extra memory the history really
+//! holds; the overcount is at most one copy of the document's rasters
+//! (16 MiB for four 800×1280 layers). So real history memory never exceeds
+//! the budget (bar the newest-step exception above).
+//!
+//! [`Edit::memory_bytes`] is a step's size on its own (every raster
+//! counted), not its share of `memory_used`.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::mem::size_of;
 
 use crate::document::Document;
@@ -241,13 +259,39 @@ impl Edit {
         }
     }
 
-    /// Bytes this step accounts for in the memory budget.
+    /// Bytes this step holds on its own, counting every raster and mask
+    /// it references in full, shared or not. A [`History`] charges shared
+    /// rasters once (see "Memory" in the module docs), so this is an upper
+    /// bound on what the step adds to [`History::memory_used`].
     pub fn memory_bytes(&self) -> usize {
+        let mut bytes = self.own_bytes();
+        self.for_each_buffer(|_, len| bytes += len);
+        bytes
+    }
+
+    /// Bytes owned by the step itself: everything except shared rasters.
+    fn own_bytes(&self) -> usize {
         size_of::<Edit>()
             + match &self.0 {
-                Step::Snapshot(d) => document_bytes(d),
+                Step::Snapshot(d) => document_own_bytes(d),
                 Step::Paint(p) => p.pixels.len(),
             }
+    }
+
+    /// Calls `f(id, len)` for every copy-on-write buffer the step
+    /// references (snapshot paint rasters and masks), once per reference.
+    fn for_each_buffer(&self, mut f: impl FnMut(usize, usize)) {
+        let Step::Snapshot(d) = &self.0 else {
+            return;
+        };
+        for l in d.layers() {
+            if let Some(m) = &l.mask {
+                f(m.buffer_id(), m.as_raw().len());
+            }
+            if let LayerKind::Paint(p) = &l.kind {
+                f(p.pixels.buffer_id(), p.pixels.as_raw().len());
+            }
+        }
     }
 
     /// Swaps the stored state with the document's. `false` if the document
@@ -290,22 +334,29 @@ fn crop(img: &RgbaImage, rect: Rect) -> Vec<u8> {
     out
 }
 
-/// Approximate heap + inline bytes of a document, counting every paint
-/// pixel and mask byte, shared or not (see "Memory" in the module docs).
-fn document_bytes(d: &Document) -> usize {
+/// Approximate heap + inline bytes of a document, leaving out the
+/// copy-on-write raster and mask buffers (see "Memory" in the module docs).
+fn document_own_bytes(d: &Document) -> usize {
     size_of::<Document>()
         + d.swatches.len() * size_of::<rp_palette_dither::Rgb>()
-        + d.layers().iter().map(layer_bytes).sum::<usize>()
+        + d.layers().iter().map(layer_own_bytes).sum::<usize>()
 }
 
-fn layer_bytes(l: &Layer) -> usize {
+fn layer_own_bytes(l: &Layer) -> usize {
     size_of::<Layer>()
         + l.name.len()
-        + l.mask.as_ref().map_or(0, |m| m.as_raw().len())
         + match &l.kind {
-            LayerKind::Paint(p) => p.pixels.as_raw().len(),
+            LayerKind::Paint(_) => 0,
             LayerKind::Image(i) => i.source.as_str().len(),
         }
+}
+
+/// A copy-on-write buffer held by the stacks: how many step references
+/// point at it, and its size.
+#[derive(Clone, Copy, Debug)]
+struct Held {
+    refs: usize,
+    bytes: usize,
 }
 
 /// An open `begin_*` awaiting [`History::commit`].
@@ -323,7 +374,10 @@ pub struct History {
     /// Next redo at the back.
     redo: Vec<Edit>,
     budget: usize,
+    /// Running total, see [`History::memory_used`].
     used: usize,
+    /// Buffers referenced by the stacks, keyed by `Arc` pointer.
+    held: HashMap<usize, Held>,
     pending: Option<Pending>,
 }
 
@@ -346,6 +400,7 @@ impl History {
             redo: Vec::new(),
             budget: bytes,
             used: 0,
+            held: HashMap::new(),
             pending: None,
         }
     }
@@ -360,7 +415,10 @@ impl History {
         self.evict();
     }
 
-    /// Bytes held by the undo and redo stacks.
+    /// Bytes the undo and redo stacks keep reachable: each step's own bytes
+    /// plus each distinct raster/mask buffer they reference, counted once,
+    /// including buffers shared with the live document (see "Memory" in
+    /// the module docs). The budget is checked against this.
     pub fn memory_used(&self) -> usize {
         self.used
     }
@@ -401,13 +459,16 @@ impl History {
         self.undo.clear();
         self.redo.clear();
         self.used = 0;
+        self.held.clear();
         self.pending = None;
     }
 
     /// Records a finished step: clears redo, pushes, evicts to budget.
     pub fn push(&mut self, edit: Edit) {
-        self.used -= self.redo.drain(..).map(|e| e.memory_bytes()).sum::<usize>();
-        self.used += edit.memory_bytes();
+        for e in std::mem::take(&mut self.redo) {
+            self.release(&e);
+        }
+        self.charge(&edit);
         self.undo.push_back(edit);
         self.evict();
     }
@@ -491,12 +552,13 @@ impl History {
         let Some(mut edit) = self.undo.pop_back() else {
             return false;
         };
-        let old = edit.memory_bytes();
+        self.release(&edit);
         if !edit.swap(doc) {
             self.clear();
             return false;
         }
-        self.used = self.used - old + edit.memory_bytes();
+        // The step now holds the other side's state, maybe other buffers.
+        self.charge(&edit);
         self.redo.push(edit);
         self.evict();
         true
@@ -509,12 +571,13 @@ impl History {
         let Some(mut edit) = self.redo.pop() else {
             return false;
         };
-        let old = edit.memory_bytes();
+        self.release(&edit);
         if !edit.swap(doc) {
             self.clear();
             return false;
         }
-        self.used = self.used - old + edit.memory_bytes();
+        // The step now holds the other side's state, maybe other buffers.
+        self.charge(&edit);
         self.undo.push_back(edit);
         self.evict();
         true
@@ -524,8 +587,37 @@ impl History {
     fn evict(&mut self) {
         while self.used > self.budget && self.undo.len() > 1 {
             let e = self.undo.pop_front().expect("len > 1");
-            self.used -= e.memory_bytes();
+            self.release(&e);
         }
+    }
+
+    /// Adds a step entering a stack to the running total; its buffers are
+    /// charged only if no other step holds them yet.
+    fn charge(&mut self, e: &Edit) {
+        self.used += e.own_bytes();
+        let (held, used) = (&mut self.held, &mut self.used);
+        e.for_each_buffer(|id, bytes| {
+            let h = held.entry(id).or_insert(Held { refs: 0, bytes });
+            if h.refs == 0 {
+                *used += bytes;
+            }
+            h.refs += 1;
+        });
+    }
+
+    /// Removes a step leaving the stacks (call before it is dropped or
+    /// swapped); a buffer is released with its last reference.
+    fn release(&mut self, e: &Edit) {
+        self.used -= e.own_bytes();
+        let (held, used) = (&mut self.held, &mut self.used);
+        e.for_each_buffer(|id, _| {
+            let h = held.get_mut(&id).expect("released buffer was charged");
+            h.refs -= 1;
+            if h.refs == 0 {
+                *used -= h.bytes;
+                held.remove(&id);
+            }
+        });
     }
 }
 
@@ -553,5 +645,176 @@ mod tests {
             crop(&img, Rect::new(1, 1, 2, 2)),
             [1, 2, 3, 4, 0, 0, 0, 0, 0, 0, 0, 0, 5, 6, 7, 8]
         );
+    }
+
+    use crate::raster::GrayImage;
+    use rp_palette_dither::Rgb;
+
+    const S: Size = Size::new(32, 16);
+    const RASTER: usize = 32 * 16 * 4;
+
+    /// The accounting rebuilt from scratch: own bytes of every stacked
+    /// step plus each distinct buffer once. Also checks the refcounts.
+    fn recount(h: &History) -> usize {
+        let mut refs: HashMap<usize, Held> = HashMap::new();
+        let mut used = 0;
+        for e in h.undo.iter().chain(h.redo.iter()) {
+            used += e.own_bytes();
+            e.for_each_buffer(|id, bytes| {
+                let r = refs.entry(id).or_insert(Held { refs: 0, bytes });
+                if r.refs == 0 {
+                    used += bytes;
+                }
+                r.refs += 1;
+            });
+        }
+        let mut want: Vec<_> = refs.iter().map(|(k, v)| (*k, v.refs, v.bytes)).collect();
+        let mut got: Vec<_> = h.held.iter().map(|(k, v)| (*k, v.refs, v.bytes)).collect();
+        want.sort();
+        got.sort();
+        assert_eq!(got, want, "refcount table out of sync");
+        used
+    }
+
+    fn check(h: &History) {
+        assert_eq!(h.memory_used(), recount(h));
+    }
+
+    fn doc() -> (Document, LayerId, LayerId) {
+        let mut d = Document::new(S);
+        let a = d.push_layer(Layer::paint("a", S));
+        let b = d.push_layer(Layer::paint("b", S));
+        d.layer_mut(b).unwrap().mask = Some(GrayImage::filled(S, 128));
+        (d, a, b)
+    }
+
+    fn fill(d: &mut Document, id: LayerId, v: u8) {
+        let px = d.layer_mut(id).unwrap().pixels_mut().unwrap();
+        px.as_raw_mut().fill(v);
+    }
+
+    fn snapshot(h: &mut History, d: &mut Document, f: impl FnOnce(&mut Document)) {
+        h.begin_snapshot(d);
+        f(d);
+        assert!(h.commit(d));
+        check(h);
+    }
+
+    #[test]
+    fn settings_snapshots_charge_shared_rasters_once() {
+        let (mut d, _, _) = doc();
+        let mut h = History::new();
+        for i in 0..50u8 {
+            snapshot(&mut h, &mut d, |d| d.swatches.push(Rgb::new(i, i, i)));
+        }
+        // Two rasters and one mask, once, however many steps hold them.
+        let rasters = 2 * RASTER + S.area();
+        let own: usize = h.undo.iter().map(Edit::own_bytes).sum();
+        assert_eq!(h.memory_used(), own + rasters);
+        assert!(
+            h.undo
+                .iter()
+                .all(|e| e.memory_bytes() == e.own_bytes() + rasters)
+        );
+        assert_eq!(h.held.len(), 3);
+        assert!(h.held.values().all(|v| v.refs == 50));
+    }
+
+    #[test]
+    fn shared_buffer_released_only_with_its_last_holder() {
+        let (mut d, a, _) = doc();
+        let mut h = History::new();
+        let id_a = |d: &Document| match &d.layer(a).unwrap().kind {
+            LayerKind::Paint(p) => p.pixels.buffer_id(),
+            _ => unreachable!(),
+        };
+        let r0 = id_a(&d);
+        snapshot(&mut h, &mut d, |d| d.swatches.push(Rgb::new(1, 1, 1)));
+        snapshot(&mut h, &mut d, |d| d.swatches.push(Rgb::new(2, 2, 2)));
+        // Fill as a snapshot: the step keeps r0, the document gets a copy.
+        snapshot(&mut h, &mut d, |d| fill(d, a, 9));
+        let r1 = id_a(&d);
+        assert_ne!(r0, r1);
+        assert_eq!(h.held[&r0].refs, 3);
+        assert!(!h.held.contains_key(&r1));
+
+        // Evict the oldest step: r0 stays charged, held by the other two.
+        let before = h.memory_used();
+        let oldest = h.undo[0].own_bytes();
+        h.set_budget(before - 1);
+        assert_eq!(h.undo_len(), 2);
+        assert_eq!(h.memory_used(), before - oldest);
+        assert_eq!(h.held[&r0].refs, 2);
+        check(&h);
+
+        // Down to the newest step: still holds r0.
+        h.set_budget(0);
+        assert_eq!(h.undo_len(), 1);
+        assert_eq!(h.held[&r0].refs, 1);
+        check(&h);
+
+        // Undo hands r0 back to the document; the redo step holds r1.
+        assert!(h.undo(&mut d));
+        assert_eq!(id_a(&d), r0);
+        assert!(!h.held.contains_key(&r0));
+        assert_eq!(h.held[&r1].refs, 1);
+        check(&h);
+        assert!(h.redo(&mut d));
+        assert_eq!(id_a(&d), r1);
+        assert_eq!(h.held[&r0].refs, 1);
+        check(&h);
+
+        // Undo, then a new edit drops the redo step and its r1.
+        assert!(h.undo(&mut d));
+        snapshot(&mut h, &mut d, |d| d.swatches.push(Rgb::new(3, 3, 3)));
+        assert!(!h.held.contains_key(&r1));
+        assert_eq!(h.undo_len(), 1);
+        assert_eq!(h.held[&r0].refs, 1);
+
+        h.clear();
+        assert_eq!(h.memory_used(), 0);
+        assert!(h.held.is_empty());
+    }
+
+    #[test]
+    fn accounting_stays_exact_through_mixed_edits() {
+        let (mut d, a, b) = doc();
+        let mut h = History::with_budget(6 * RASTER);
+        for i in 0..60u32 {
+            let v = i as u8;
+            match i % 6 {
+                0 => snapshot(&mut h, &mut d, |d| d.swatches.push(Rgb::new(v, 0, 0))),
+                1 => snapshot(&mut h, &mut d, |d| fill(d, a, v)),
+                2 => {
+                    h.begin_paint(&d, b);
+                    let px = d.layer_mut(b).unwrap().pixels_mut().unwrap();
+                    px.put(i % 32, i % 16, [v, 1, 2, 255]);
+                    assert!(h.commit(&d));
+                    check(&h);
+                }
+                3 => snapshot(&mut h, &mut d, |d| {
+                    d.layer_mut(b).unwrap().mask.as_mut().unwrap().put(0, 0, v);
+                }),
+                4 => {
+                    h.undo(&mut d);
+                    check(&h);
+                    h.undo(&mut d);
+                    check(&h);
+                    h.redo(&mut d);
+                    check(&h);
+                }
+                _ => snapshot(&mut h, &mut d, |d| {
+                    let dup = d.layer(a).unwrap().clone();
+                    d.push_layer(dup);
+                }),
+            }
+            assert!(h.memory_used() <= h.budget() || h.undo_len() == 1);
+        }
+        while h.undo(&mut d) {
+            check(&h);
+        }
+        while h.redo(&mut d) {
+            check(&h);
+        }
     }
 }
