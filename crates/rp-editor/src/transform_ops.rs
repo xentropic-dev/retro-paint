@@ -26,8 +26,12 @@
 //!   nearest corner wins among corners.
 //! - A position-locked layer refuses moves, nudges and transforms; the
 //!   status bar says why.
-//! - Masks stay in canvas space ([`rp_doc::Layer::mask`]): moving or
-//!   transforming a masked layer leaves its mask where it is.
+//! - Masks follow moves: a Move/Select drag or nudge shifts the layer's
+//!   mask by the same whole-pixel delta, padding with white; values pushed
+//!   off the canvas are lost (masks stay canvas-sized). A drag shifts the
+//!   mask as it was at the press, so nothing is lost until the release.
+//!   Scaling and rotating leave the mask where it is (v1). See
+//!   [`crate::mask_ops`].
 //! - One drag is `begin_transform` → `continue_transform`* →
 //!   `end_transform`; the layer's state before the drag is kept in
 //!   [`TransformDrag`]. One drag is one undo step (a snapshot opened on
@@ -38,8 +42,9 @@
 
 use std::f32::consts::PI;
 
-use rp_doc::{EditError, LayerId, LayerKind, Size, Tool, Transform};
+use rp_doc::{EditError, GrayImage, LayerId, LayerKind, Size, Tool, Transform};
 
+use crate::mask_ops::shifted_mask;
 use crate::state::EditorState;
 use crate::undo_ops::{Coalesce, EditLabel};
 use crate::viewport::{Vec2, Viewport};
@@ -326,7 +331,7 @@ pub enum StartPlacement {
 }
 
 /// A Move / Select drag in progress.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct TransformDrag {
     pub layer: LayerId,
     pub kind: DragKind,
@@ -334,6 +339,9 @@ pub struct TransformDrag {
     pub start: Vec2,
     /// The layer's placement before the drag (for undo).
     pub before: StartPlacement,
+    /// A Move drag's layer mask as it was at the press (shared, not
+    /// copied); each step shifts this by the whole drag offset.
+    pub mask_before: Option<GrayImage>,
 }
 
 fn refusal(verb: &str, name: &str, e: EditError) -> String {
@@ -412,6 +420,10 @@ impl EditorState {
             DragKind::Rotate => EditLabel::Rotate,
         };
         let id = layer.id();
+        let mask_before = match kind {
+            DragKind::Move => layer.mask.clone(),
+            _ => None,
+        };
         self.history
             .begin_snapshot(&self.document, label, None, self.content);
         self.transform_drag = Some(TransformDrag {
@@ -419,6 +431,7 @@ impl EditorState {
             kind,
             start: self.viewport.screen_to_canvas(screen),
             before,
+            mask_before,
         });
         true
     }
@@ -427,7 +440,7 @@ impl EditorState {
     /// frees the aspect ratio (scale) or snaps the angle (rotate). Bumps the
     /// document version once if the layer changed. Returns whether it did.
     pub fn continue_transform(&mut self, screen: Vec2, shift: bool) -> bool {
-        let Some(drag) = self.transform_drag else {
+        let Some(drag) = self.transform_drag.clone() else {
             return false;
         };
         let p = self.viewport.screen_to_canvas(screen);
@@ -446,13 +459,15 @@ impl EditorState {
                     return false;
                 }
                 self.status = format!("Move {dx}, {dy}");
-                layer.translate_by(step.0, step.1)
+                layer.translate_by(step.0, step.1).map(|()| Some((dx, dy)))
             }
             (StartPlacement::Image(t0, src), kind) => {
+                let mut moved = None;
                 let t = match kind {
                     DragKind::Move => {
                         let d = drag_delta(drag.start, p);
                         self.status = format!("Move {}, {}", d.0, d.1);
+                        moved = Some(d);
                         translated(t0, d)
                     }
                     DragKind::Scale(c) => {
@@ -477,11 +492,14 @@ impl EditorState {
                 if cur.transform == t {
                     return false;
                 }
-                layer.set_transform(t)
+                layer.set_transform(t).map(|()| moved)
             }
         };
         match result {
-            Ok(()) => {
+            Ok(moved) => {
+                if let (Some((dx, dy)), Some(mask)) = (moved, &drag.mask_before) {
+                    layer.mask = Some(shifted_mask(mask, dx, dy));
+                }
                 self.mark_document_changed();
                 true
             }
@@ -501,7 +519,7 @@ impl EditorState {
             return;
         }
         self.shift_held = shift;
-        if let (Some(_), Some(c)) = (self.transform_drag, self.cursor_canvas) {
+        if let (Some(_), Some(c)) = (&self.transform_drag, self.cursor_canvas) {
             self.continue_transform(self.viewport.canvas_to_screen(c), shift);
         }
     }
@@ -532,6 +550,9 @@ impl EditorState {
         };
         match layer.translate_by(dx, dy) {
             Ok(()) => {
+                if let Some(mask) = &layer.mask {
+                    layer.mask = Some(shifted_mask(mask, dx, dy));
+                }
                 self.status = format!("Nudge {dx}, {dy}");
                 self.mark_document_changed();
                 true
@@ -916,7 +937,7 @@ mod tests {
         assert!(st.continue_transform(start, false));
         assert_eq!(offset_of(&st, paint), (0, 0));
         assert_eq!(
-            st.transform_drag.unwrap().before,
+            st.transform_drag.clone().unwrap().before,
             StartPlacement::Offset(0, 0)
         );
         st.end_transform();
@@ -938,7 +959,7 @@ mod tests {
         assert!(st.transform_handles().is_none());
         let start = s(&st, Vec2::new(50.25, 60.0));
         assert!(st.begin_transform(start));
-        assert_eq!(st.transform_drag.unwrap().kind, DragKind::Move);
+        assert_eq!(st.transform_drag.clone().unwrap().kind, DragKind::Move);
         st.continue_transform(Vec2::new(start.x + 7.4, start.y + 2.6), false);
         let t1 = transform_of(&st, img);
         assert_eq!((t1.translate_x, t1.translate_y), (57.25, 63.0));
@@ -953,7 +974,7 @@ mod tests {
         // Bottom-right corner (90, 80) dragged to canvas (130, 100): 2×.
         assert!(st.begin_transform(h.corners[2]));
         assert_eq!(
-            st.transform_drag.unwrap().kind,
+            st.transform_drag.clone().unwrap().kind,
             DragKind::Scale(Corner::BottomRight)
         );
         let v = st.doc_version;
@@ -976,7 +997,7 @@ mod tests {
         let h = st.transform_handles().unwrap();
         let center = Frame::of(&transform_of(&st, img), SRC).center;
         assert!(st.begin_transform(h.rotate));
-        assert_eq!(st.transform_drag.unwrap().kind, DragKind::Rotate);
+        assert_eq!(st.transform_drag.clone().unwrap().kind, DragKind::Rotate);
         st.continue_transform(s(&st, Vec2::new(center.x + 100.0, center.y + 3.0)), true);
         let t3 = transform_of(&st, img);
         assert!((t3.rotation - PI / 2.0).abs() < EPS, "{}", t3.rotation);
@@ -986,7 +1007,7 @@ mod tests {
         // Inside the box (not on a handle) moves.
         let inside = s(&st, center);
         assert!(st.begin_transform(inside));
-        assert_eq!(st.transform_drag.unwrap().kind, DragKind::Move);
+        assert_eq!(st.transform_drag.clone().unwrap().kind, DragKind::Move);
     }
 
     #[test]
@@ -1008,16 +1029,6 @@ mod tests {
         assert!(st.transform_handles().is_none());
         st.tool = Tool::Brush;
         assert!(!st.begin_transform(Vec2::new(5.0, 5.0)));
-    }
-
-    #[test]
-    fn masks_stay_in_canvas_space_when_the_layer_moves() {
-        let (mut st, paint, _) = editor();
-        st.selected_layer = Some(paint);
-        let mask = GrayImage::filled(Size::new(200, 200), 255);
-        st.document.layer_mut(paint).unwrap().mask = Some(mask.clone());
-        st.nudge_selected(10, 10);
-        assert_eq!(st.document.layer(paint).unwrap().mask, Some(mask));
     }
 
     #[test]
@@ -1043,5 +1054,95 @@ mod tests {
         assert_eq!(st.doc_version, v + 1);
         st.set_shift(false);
         assert_eq!(st.doc_version, v + 1);
+    }
+
+    /// A 200×200 mask that is 0 in the 10×10 square at (20, 20), 255 else.
+    fn square_mask() -> GrayImage {
+        let mut m = GrayImage::filled(Size::new(200, 200), 255);
+        for y in 20..30 {
+            for x in 20..30 {
+                m.put(x, y, 0);
+            }
+        }
+        m
+    }
+
+    fn mask_of(st: &EditorState, id: LayerId) -> &GrayImage {
+        st.document.layer(id).unwrap().mask.as_ref().unwrap()
+    }
+
+    #[test]
+    fn move_drag_shifts_the_mask_with_white_padding_and_one_undo() {
+        for paint_layer in [true, false] {
+            let (mut st, paint, img) = editor();
+            let id = if paint_layer { paint } else { img };
+            st.selected_layer = Some(id);
+            st.tool = Tool::Move;
+            st.document.layer_mut(id).unwrap().mask = Some(square_mask());
+            let before = st.document.clone();
+            let start = s(&st, Vec2::new(25.0, 25.0));
+            assert!(st.begin_transform(start));
+            // Far left first: the square leaves the canvas mid-drag...
+            st.continue_transform(Vec2::new(start.x - 100.0, start.y), false);
+            assert!(mask_of(&st, id).as_raw().iter().all(|&v| v == 255));
+            // ...and comes back intact, since the drag shifts the mask from
+            // the press.
+            st.continue_transform(Vec2::new(start.x + 5.0, start.y - 3.0), false);
+            st.end_transform();
+            let m = mask_of(&st, id);
+            assert_eq!(m.size(), Size::new(200, 200));
+            assert_eq!(m.get(25, 17), 0);
+            assert_eq!(m.get(34, 26), 0);
+            assert_eq!(m.get(24, 17), 255);
+            assert_eq!(m.get(25, 27), 255);
+            assert_eq!(m, &shifted_mask(&square_mask(), 5, -3));
+            assert_eq!(st.history.undo_len(), 1);
+            st.undo();
+            assert_eq!(st.document, before);
+            st.redo();
+            assert_eq!(mask_of(&st, id), &shifted_mask(&square_mask(), 5, -3));
+        }
+    }
+
+    #[test]
+    fn nudges_shift_the_mask_and_lose_what_leaves_the_canvas() {
+        let (mut st, paint, img) = editor();
+        st.tool = Tool::Move;
+        for id in [paint, img] {
+            st.selected_layer = Some(id);
+            st.document.layer_mut(id).unwrap().mask = Some(square_mask());
+            assert!(st.nudge_selected(10, 0));
+            assert!(st.nudge_selected(0, -1));
+            assert_eq!(mask_of(&st, id), &shifted_mask(&square_mask(), 10, -1));
+            // Pushed off the left edge and back: the square is gone.
+            st.nudge_selected(-40, 0);
+            st.nudge_selected(30, 0);
+            assert!(mask_of(&st, id).as_raw().iter().all(|&v| v == 255));
+        }
+        // A position lock refuses the nudge and leaves the mask alone.
+        st.document.layer_mut(img).unwrap().mask = Some(square_mask());
+        st.document.layer_mut(img).unwrap().lock.position = true;
+        assert!(!st.nudge_selected(5, 5));
+        assert_eq!(mask_of(&st, img), &square_mask());
+    }
+
+    #[test]
+    fn scale_and_rotate_leave_the_mask_alone() {
+        let (mut st, _, img) = editor();
+        st.document.layer_mut(img).unwrap().mask = Some(square_mask());
+        let h = st.transform_handles().unwrap();
+        assert!(st.begin_transform(h.corners[2]));
+        assert!(
+            st.continue_transform(Vec2::new(h.corners[2].x + 30.0, h.corners[2].y + 9.0), true)
+        );
+        st.end_transform();
+        assert!(st.transform_drag.is_none());
+        let h = st.transform_handles().unwrap();
+        assert!(st.begin_transform(h.rotate));
+        assert_eq!(st.transform_drag.clone().unwrap().kind, DragKind::Rotate);
+        assert!(st.continue_transform(Vec2::new(h.rotate.x + 40.0, h.rotate.y + 15.0), false));
+        st.end_transform();
+        assert_ne!(transform_of(&st, img), Transform::at(50.0, 60.0));
+        assert_eq!(mask_of(&st, img), &square_mask());
     }
 }

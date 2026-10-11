@@ -5,18 +5,26 @@
 //! and two rows of buttons below it: New / Image / Delete / Up / Down (Image
 //! is Insert Image…) and Duplicate / Flip H / Flip V. Click a row to select it,
 //! double-click its name to rename it inline (Enter applies, Escape cancels,
-//! clicking elsewhere applies). Thin: every command is an
-//! [`EditorState`] method in [`crate::layer_ops`].
+//! clicking elsewhere applies). A masked layer's row shows a small mask
+//! thumbnail; clicking it (or the MASK badge) toggles editing the mask (see
+//! [`crate::mask_ops`]); the targeted thumbnail gets a white frame.
+//! Thumbnails are rebuilt only when the document version changes. Thin:
+//! every command is an [`EditorState`] method in [`crate::layer_ops`] and
+//! [`crate::mask_ops`].
+
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use gpui::{
-    ClickEvent, Context, Div, Entity, FocusHandle, KeyDownEvent, SharedString, Stateful, Window,
-    div, prelude::*, px, rgb,
+    ClickEvent, Context, Div, Entity, FocusHandle, KeyDownEvent, RenderImage, SharedString,
+    Stateful, Window, div, img, prelude::*, px, rgb,
 };
 use rp_doc::{BlendMode, Layer, LayerId, LayerKind};
 
 use crate::flip_ops::FlipAxis;
 use crate::insert_flow::prompt_insert_image;
 use crate::layer_ops::OPACITY_STEP;
+use crate::mask_ops::{EditTarget, THUMB_SIDE, mask_thumbnail};
 use crate::state::EditorState;
 use crate::view::{ACCENT, BG_HOVER, BG_PANEL_HEADER, BORDER, TEXT, TEXT_DIM, edit_state};
 
@@ -28,6 +36,18 @@ const ROW_H: f32 = 26.;
 const LIST_MIN_ROWS: f32 = 3.;
 const LIST_MAX_ROWS: f32 = 8.;
 
+/// Displayed size of the longest side of a mask thumbnail, in logical
+/// pixels (the image has [`THUMB_SIDE`] pixels there, for HiDPI).
+const THUMB_PX: f32 = 20.;
+
+/// A cached mask thumbnail: the `doc_version` it was made at, the image,
+/// and its size in pixels.
+struct Thumb {
+    version: u64,
+    image: Arc<RenderImage>,
+    size: (u32, u32),
+}
+
 /// What a list row shows; copied out so rendering never clones pixels.
 struct RowInfo {
     id: LayerId,
@@ -36,6 +56,8 @@ struct RowInfo {
     image: bool,
     locked: bool,
     masked: bool,
+    /// The mask is this row's edit target.
+    mask_target: bool,
     /// Rename buffer, while this row is being renamed.
     rename: Option<String>,
 }
@@ -50,6 +72,7 @@ impl RowInfo {
             image: matches!(layer.kind, LayerKind::Image(_)),
             locked: layer.lock.pixels || layer.lock.position,
             masked: layer.mask.is_some(),
+            mask_target: state.edit_target_of(id) == EditTarget::Mask,
             rename: state
                 .renaming
                 .as_ref()
@@ -63,6 +86,10 @@ pub(crate) struct LayersPanel {
     state: Entity<EditorState>,
     /// Holds keyboard focus during an inline rename.
     focus: FocusHandle,
+    /// Mask thumbnails by layer, with the `doc_version` they were made at.
+    thumbs: HashMap<LayerId, Thumb>,
+    /// Replaced thumbnails, removed from the sprite atlas on the next render.
+    stale: Vec<Arc<RenderImage>>,
 }
 
 /// Display name of a blend mode.
@@ -87,7 +114,12 @@ impl LayersPanel {
             this.edit(cx, |s| s.commit_rename());
         })
         .detach();
-        Self { state, focus }
+        Self {
+            state,
+            focus,
+            thumbs: HashMap::new(),
+            stale: Vec::new(),
+        }
     }
 
     fn edit<R>(&self, cx: &mut Context<Self>, f: impl FnOnce(&mut EditorState) -> R) -> R {
@@ -129,6 +161,63 @@ impl LayersPanel {
             },
         }
         cx.stop_propagation();
+    }
+
+    /// Brings the mask thumbnails up to date with the document.
+    fn refresh_thumbs(&mut self, cx: &mut Context<Self>) {
+        let s = self.state.read(cx);
+        let version = s.doc_version;
+        let mut keep = HashMap::new();
+        for layer in s.document.layers() {
+            let Some(mask) = &layer.mask else { continue };
+            let id = layer.id();
+            match self.thumbs.remove(&id) {
+                Some(entry) if entry.version == version => {
+                    keep.insert(id, entry);
+                }
+                old => {
+                    self.stale.extend(old.map(|e| e.image));
+                    let t = mask_thumbnail(mask, THUMB_SIDE);
+                    let buf = image::RgbaImage::from_raw(t.width, t.height, t.to_bgra())
+                        .expect("buffer matches size");
+                    let img = Arc::new(RenderImage::new(vec![image::Frame::new(buf)]));
+                    keep.insert(
+                        id,
+                        Thumb {
+                            version,
+                            image: img,
+                            size: (t.width, t.height),
+                        },
+                    );
+                }
+            }
+        }
+        self.stale.extend(self.thumbs.drain().map(|(_, e)| e.image));
+        self.thumbs = keep;
+    }
+
+    /// A row's clickable mask thumbnail.
+    fn thumb(&self, id: LayerId, targeted: bool, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+        let Thumb {
+            image,
+            size: (w, h),
+            ..
+        } = self.thumbs.get(&id)?;
+        let k = THUMB_PX / (*w).max(*h) as f32;
+        Some(
+            div()
+                .id(SharedString::from(format!("layer-mask-{id:?}")))
+                .flex_none()
+                .border_1()
+                .border_color(rgb(if targeted { 0xffffff } else { 0x4a4a4a }))
+                .when(targeted, |d| d.border_2())
+                .cursor_pointer()
+                .child(img(image.clone()).w(px(*w as f32 * k)).h(px(*h as f32 * k)))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.edit(cx, |s| s.toggle_mask_target(id));
+                })),
+        )
     }
 
     fn row(&self, layer: RowInfo, selected: bool, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -180,8 +269,23 @@ impl LayersPanel {
             badges = badges.child(badge("LOCK"));
         }
         if layer.masked {
-            badges = badges.child(badge("MASK"));
+            let targeted = layer.mask_target;
+            badges = badges.child(
+                badge("MASK")
+                    .id(SharedString::from(format!("layer-mask-badge-{id:?}")))
+                    .cursor_pointer()
+                    .when(targeted, |d| {
+                        d.bg(rgb(0xffffff))
+                            .text_color(rgb(0x000000))
+                            .border_color(rgb(0xffffff))
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.edit(cx, |s| s.toggle_mask_target(id));
+                    })),
+            );
         }
+        let thumb = self.thumb(id, layer.mask_target, cx);
 
         div()
             .id(SharedString::from(format!("layer-row-{id:?}")))
@@ -198,6 +302,7 @@ impl LayersPanel {
             .when(selected, |d| d.bg(rgb(ACCENT)).text_color(rgb(0xffffff)))
             .when(!selected, |d| d.hover(|s| s.bg(rgb(BG_HOVER))))
             .child(eye)
+            .children(thumb)
             .child(name)
             .child(badges)
             .on_click(cx.listener(move |this, ev: &ClickEvent, window, cx| {
@@ -222,6 +327,7 @@ impl LayersPanel {
             layer.lock,
             layer.mask.is_some(),
         );
+        let on_mask = state.edit_target() == EditTarget::Mask;
 
         let mut blends = div().flex().flex_row().gap_1();
         for mode in BlendMode::ALL {
@@ -292,25 +398,44 @@ impl LayersPanel {
                     })),
             );
 
-        let mask_row = div()
+        let mut mask_row = div()
             .flex()
             .flex_row()
             .items_center()
             .gap_1()
-            .child(div().w(px(46.)).text_color(rgb(TEXT_DIM)).child("Mask"))
-            .child(
-                button("mask", if has_mask { "Remove mask" } else { "Add mask" })
-                    .flex_1()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.edit_selected(cx, |s, id| {
-                            if has_mask {
-                                s.remove_mask(id)
-                            } else {
-                                s.add_mask(id)
-                            }
-                        });
-                    })),
-            );
+            .child(div().w(px(46.)).text_color(rgb(TEXT_DIM)).child("Mask"));
+        if has_mask {
+            mask_row = mask_row
+                .child(
+                    toggle("edit-layer".into(), "Layer", !on_mask)
+                        .flex_1()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.edit_selected(cx, |s, id| {
+                                s.set_edit_target(id, EditTarget::Layer)
+                            });
+                        })),
+                )
+                .child(
+                    toggle("edit-mask".into(), "Edit mask", on_mask)
+                        .flex_1()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.edit_selected(cx, |s, id| s.set_edit_target(id, EditTarget::Mask));
+                        })),
+                );
+        }
+        let mask_row = mask_row.child(
+            button("mask", if has_mask { "Remove" } else { "Add mask" })
+                .flex_1()
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.edit_selected(cx, |s, id| {
+                        if has_mask {
+                            s.remove_mask(id)
+                        } else {
+                            s.add_mask(id)
+                        }
+                    });
+                })),
+        );
 
         div()
             .flex()
@@ -460,7 +585,11 @@ fn badge(label: &'static str) -> Div {
 }
 
 impl Render for LayersPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.refresh_thumbs(cx);
+        for img in self.stale.drain(..) {
+            let _ = window.drop_image(img);
+        }
         let (rows, selected) = {
             let s = self.state.read(cx);
             let rows: Vec<_> = s

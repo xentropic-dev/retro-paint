@@ -23,6 +23,7 @@ pub mod image_ops;
 mod insert_flow;
 pub mod layer_ops;
 mod layers_panel;
+pub mod mask_ops;
 pub mod paint_ops;
 pub mod panel_layout;
 pub mod paste_ops;

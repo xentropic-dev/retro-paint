@@ -5,7 +5,8 @@
 //! - Brush paints the foreground color with the left button and the
 //!   background color with the right button. Eraser lowers alpha with the
 //!   same brush (either button). Picker samples the flattened image under the
-//!   cursor into the foreground (left) or background (right).
+//!   cursor into the foreground (left) or background (right), whatever the
+//!   edit target.
 //! - The default brush is the built-in hard round brush; a Hard/Soft toggle
 //!   swaps in the built-in soft one. Size is 1–256 canvas pixels; the brush
 //!   is resized once per size change and the sized brush is cached, never
@@ -16,6 +17,9 @@
 //! - Strokes happen in canvas coordinates; the layer's integer offset is
 //!   subtracted before stamping, and dabs are clipped to the layer raster.
 //! - Locked and image layers refuse the stroke and say why in the status bar.
+//! - With the layer's mask as the edit target, strokes paint the mask
+//!   instead (see [`crate::mask_ops`]): Brush left hides, Brush right and
+//!   Eraser reveal; image layers and pixel-locked layers allow it.
 //! - The document version is bumped once per pointer event that laid down at
 //!   least one dab, never per dab; the render worker coalesces.
 //! - One stroke is one undo step: the press opens a paint step on the
@@ -31,6 +35,7 @@ use rp_doc::{EditError, LayerId, LayerKind, Rect, Size, Tool};
 use crate::undo_ops::EditLabel;
 use rp_palette_dither::Rgb;
 
+use crate::mask_ops::{EditTarget, MASK_HIDE, MASK_SHOW, mask_dab};
 use crate::state::EditorState;
 use crate::viewport::Vec2;
 
@@ -187,12 +192,22 @@ pub enum PaintButton {
     Secondary,
 }
 
+/// What a stroke paints.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StrokePaint {
+    /// The layer's pixels in this color.
+    Color([u8; 4]),
+    /// Lowers the layer's alpha.
+    Erase,
+    /// The layer's mask toward this value.
+    Mask(u8),
+}
+
 /// A stroke in progress.
 #[derive(Clone, Debug)]
 pub struct Stroke {
     pub layer: LayerId,
-    /// `None` erases.
-    pub color: Option<[u8; 4]>,
+    pub paint: StrokePaint,
     spacer: Spacer,
     /// Raster pixels any dab touched so far, `[x0, y0, x1, y1)` in layer
     /// raster coordinates (unclipped).
@@ -200,6 +215,13 @@ pub struct Stroke {
 }
 
 impl Stroke {
+    fn grow(&mut self, [a, b, c, d]: [i64; 4]) {
+        self.bounds = Some(match self.bounds {
+            Some([x0, y0, x1, y1]) => [x0.min(a), y0.min(b), x1.max(c), y1.max(d)],
+            None => [a, b, c, d],
+        });
+    }
+
     /// The stroke's dab bounds clipped to a `size` raster, for
     /// [`rp_doc::History::commit_within`].
     pub fn dirty_rect(&self, size: Size) -> Option<Rect> {
@@ -319,11 +341,16 @@ impl EditorState {
     /// a stroke started.
     pub fn begin_stroke(&mut self, c: Vec2, button: PaintButton) -> bool {
         self.stroke = None;
-        let color = match (self.tool, button) {
-            (Tool::Brush, PaintButton::Primary) => Some(rgba(self.document.fg)),
-            (Tool::Brush, PaintButton::Secondary) => Some(rgba(self.document.bg)),
-            (Tool::Eraser, _) => None,
-            _ => return false,
+        if !self.tool_paints() {
+            return false;
+        }
+        if self.edit_target() == EditTarget::Mask {
+            return self.begin_mask_stroke(c, button);
+        }
+        let paint = match (self.tool, button) {
+            (Tool::Brush, PaintButton::Primary) => StrokePaint::Color(rgba(self.document.fg)),
+            (Tool::Brush, PaintButton::Secondary) => StrokePaint::Color(rgba(self.document.bg)),
+            _ => StrokePaint::Erase,
         };
         let Some(id) = self.selected_layer else {
             self.status = "Can't paint: no layer selected".into();
@@ -344,20 +371,39 @@ impl EditorState {
             };
             return false;
         }
-        let label = match color {
-            Some(_) => EditLabel::BrushStroke,
-            None => EditLabel::EraserStroke,
+        let label = match paint {
+            StrokePaint::Erase => EditLabel::EraserStroke,
+            _ => EditLabel::BrushStroke,
         };
         self.history
             .begin_paint(&self.document, id, label, self.content);
+        self.start_stroke(id, paint, c);
+        true
+    }
+
+    /// A stroke on the selected layer's mask (the edit target is Mask).
+    fn begin_mask_stroke(&mut self, c: Vec2, button: PaintButton) -> bool {
+        let Some(id) = self.selected_layer else {
+            return false;
+        };
+        let value = match (self.tool, button) {
+            (Tool::Brush, PaintButton::Primary) => MASK_HIDE,
+            _ => MASK_SHOW,
+        };
+        self.history
+            .begin_snapshot(&self.document, EditLabel::MaskStroke, None, self.content);
+        self.start_stroke(id, StrokePaint::Mask(value), c);
+        true
+    }
+
+    fn start_stroke(&mut self, id: LayerId, paint: StrokePaint, c: Vec2) {
         self.stroke = Some(Stroke {
             layer: id,
-            color,
+            paint,
             spacer: Spacer::new(self.brush.brush().step()),
             bounds: None,
         });
         self.continue_stroke(c);
-        true
     }
 
     /// Extends the stroke to canvas point `c`: stamps every spaced dab
@@ -371,13 +417,28 @@ impl EditorState {
         if dabs.is_empty() {
             return 0;
         }
-        let (id, color) = (stroke.layer, stroke.color);
+        let (id, paint) = (stroke.layer, stroke.paint);
         let brush = self.brush.brush();
         let (mw, mh) = (brush.mask.width, brush.mask.height);
         let Some(layer) = self.document.layer_mut(id) else {
             self.stroke = None;
             return 0;
         };
+        if let StrokePaint::Mask(value) = paint {
+            // Masks are canvas-space: no offset.
+            let Some(mask) = &mut layer.mask else {
+                self.stroke = None;
+                return 0;
+            };
+            let s = mask.size();
+            let buf = mask.as_raw_mut();
+            for &(x, y) in &dabs {
+                stroke.grow(dab_bounds(mw, mh, x, y));
+                mask_dab(buf, s.width, s.height, brush, x, y, value, 1.0);
+            }
+            self.mark_document_changed();
+            return dabs.len();
+        }
         let (ox, oy) = match &layer.kind {
             rp_doc::LayerKind::Paint(p) => (p.offset_x as f32, p.offset_y as f32),
             rp_doc::LayerKind::Image(_) => (0.0, 0.0),
@@ -390,14 +451,10 @@ impl EditorState {
         let buf = pixels.as_raw_mut();
         for &(x, y) in &dabs {
             let (lx, ly) = (x - ox, y - oy);
-            let [a, b, c, d] = dab_bounds(mw, mh, lx, ly);
-            stroke.bounds = Some(match stroke.bounds {
-                Some([x0, y0, x1, y1]) => [x0.min(a), y0.min(b), x1.max(c), y1.max(d)],
-                None => [a, b, c, d],
-            });
-            match color {
-                Some(rgba) => stamp(buf, w, h, brush, lx, ly, rgba, 1.0),
-                None => erase_dab(buf, w, h, brush, lx, ly, 1.0),
+            stroke.grow(dab_bounds(mw, mh, lx, ly));
+            match paint {
+                StrokePaint::Color(rgba) => stamp(buf, w, h, brush, lx, ly, rgba, 1.0),
+                _ => erase_dab(buf, w, h, brush, lx, ly, 1.0),
             }
         }
         self.mark_document_changed();
@@ -409,6 +466,11 @@ impl EditorState {
         let Some(stroke) = self.stroke.take() else {
             return;
         };
+        if let StrokePaint::Mask(_) = stroke.paint {
+            // A snapshot step: compares the whole document.
+            self.commit_step(None);
+            return;
+        }
         let hint = match self.document.layer(stroke.layer).map(|l| &l.kind) {
             Some(LayerKind::Paint(p)) => stroke.dirty_rect(p.pixels.size()),
             _ => None,

@@ -174,6 +174,7 @@ impl EditorState {
         let name = copy.name.clone();
         let id = self.document.insert_layer(index + 1, copy);
         self.selected_layer = Some(id);
+        self.mask_target = None;
         self.mark_document_changed();
         self.status = format!("Added {name}");
         true

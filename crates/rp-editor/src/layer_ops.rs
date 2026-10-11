@@ -61,6 +61,9 @@ impl EditorState {
             if self.renaming.as_ref().is_some_and(|r| r.layer != id) {
                 self.commit_rename();
             }
+            if self.selected_layer != Some(id) {
+                self.mask_target = None;
+            }
             self.selected_layer = Some(id);
         }
     }
@@ -98,6 +101,7 @@ impl EditorState {
             .map_or(self.document.layers().len(), |i| i + 1);
         let id = self.document.insert_layer(index, layer);
         self.selected_layer = Some(id);
+        self.mask_target = None;
         self.mark_document_changed();
         self.status = format!("Added {name}");
         id
@@ -127,6 +131,7 @@ impl EditorState {
         }
         let next = index.saturating_sub(1);
         self.selected_layer = Some(self.document.layers()[next].id());
+        self.mask_target = None;
         self.mark_document_changed();
         self.status = format!("Deleted {}", removed.name);
         true
@@ -239,8 +244,14 @@ impl EditorState {
         })
     }
 
+    /// Removes layer `id`'s mask; if it was the edit target, strokes go
+    /// back to the layer's pixels.
     pub fn remove_mask(&mut self, id: LayerId) -> bool {
-        self.modify_layer(id, EditLabel::RemoveMask, |l| l.mask.take().is_some())
+        let removed = self.modify_layer(id, EditLabel::RemoveMask, |l| l.mask.take().is_some());
+        if removed && self.mask_target == Some(id) {
+            self.mask_target = None;
+        }
+        removed
     }
 
     /// Starts an inline rename of layer `id` and selects it.

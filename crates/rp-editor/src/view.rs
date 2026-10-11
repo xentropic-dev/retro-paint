@@ -797,6 +797,11 @@ impl EditorView {
                 if state.is_dirty() { " •" } else { "" }
             )))
             .child(tool_label(state.tool))
+            .children(
+                state
+                    .edit_target_label()
+                    .map(|l| div().text_color(rgb(0xffffff)).child(l)),
+            )
             .child(format!(
                 "{}×{} → {}×{}",
                 doc.canvas_size.width,

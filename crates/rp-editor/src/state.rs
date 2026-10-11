@@ -209,6 +209,9 @@ pub struct EditorState {
     pub space_held: bool,
     /// The layer the Layers panel acts on.
     pub selected_layer: Option<LayerId>,
+    /// The layer whose mask strokes edit, if any; only counts while it is
+    /// the selected layer and has a mask (see [`crate::mask_ops`]).
+    pub mask_target: Option<LayerId>,
     /// Inline rename in progress in the Layers panel.
     pub renaming: Option<RenameEdit>,
     /// Filter panel: parameters of the palette modes not currently selected.
@@ -279,6 +282,7 @@ impl EditorState {
             pan_drag: None,
             space_held: false,
             selected_layer,
+            mask_target: None,
             renaming: None,
             palette_memory: PaletteMemory::default(),
             brush: BrushState::default(),
@@ -309,6 +313,7 @@ impl EditorState {
         self.history.clear();
         let s = document.canvas_size;
         self.selected_layer = document.layers().last().map(Layer::id);
+        self.mask_target = None;
         self.renaming = None;
         self.stroke = None;
         self.transform_drag = None;

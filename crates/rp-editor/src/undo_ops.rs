@@ -6,6 +6,8 @@
 //!   insert image, swatch add/remove) as one snapshot step;
 //! - a gesture: a brush/eraser stroke opens a paint step on press and
 //!   commits it on release (only the stroke's dirty rectangle is stored); a
+//!   mask stroke opens a snapshot step on press (only the stroked mask is
+//!   copied, the rest is shared copy-on-write) and commits it on release; a
 //!   move/scale/rotate drag opens a snapshot step on press and commits it on
 //!   release;
 //! - Project Settings pushes the document it returns as a snapshot step.
@@ -50,6 +52,7 @@ use crate::state::EditorState;
 pub enum EditLabel {
     BrushStroke,
     EraserStroke,
+    MaskStroke,
     AddLayer,
     DeleteLayer,
     ReorderLayer,
@@ -81,6 +84,7 @@ impl EditLabel {
         match self {
             EditLabel::BrushStroke => "Brush Stroke",
             EditLabel::EraserStroke => "Eraser Stroke",
+            EditLabel::MaskStroke => "Mask Stroke",
             EditLabel::AddLayer => "Add Layer",
             EditLabel::DeleteLayer => "Delete Layer",
             EditLabel::ReorderLayer => "Reorder Layer",
@@ -580,6 +584,7 @@ impl EditorState {
         if !keep {
             self.selected_layer = self.document.layers().last().map(Layer::id);
         }
+        self.fix_edit_target();
     }
 }
 

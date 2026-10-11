@@ -185,6 +185,7 @@ impl EditorState {
             .map_or(self.document.layers().len(), |i| i + 1);
         let id = self.document.insert_layer(index, layer);
         self.selected_layer = Some(id);
+        self.mask_target = None;
         self.mark_document_changed();
         let pct = (transform.scale_x * 100.0).round();
         self.status = if transform.scale_x < 1.0 {
