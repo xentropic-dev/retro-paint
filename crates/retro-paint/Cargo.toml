@@ -7,3 +7,9 @@ license.workspace = true
 [dependencies]
 rp-editor.workspace = true
 rp-dos.workspace = true
+
+[dev-dependencies]
+rp-doc.workspace = true
+rp-format.workspace = true
+rp-palette-dither = { workspace = true, features = ["test-util"] }
+png = "0.18"
