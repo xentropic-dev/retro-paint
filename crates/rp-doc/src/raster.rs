@@ -1,7 +1,19 @@
 //! Plain raster buffers: canvas-sized RGBA layers, grayscale masks, and
 //! decoded source images.
+//!
+//! # Copy-on-write
+//!
+//! Both image types keep their pixels behind an [`Arc`]. Cloning an image
+//! (or a [`Layer`](crate::Layer), or a whole [`Document`](crate::Document))
+//! shares the buffer instead of copying it, so history snapshots and
+//! render-worker jobs cost a pointer per raster. The first write through a
+//! clone ([`RgbaImage::as_raw_mut`], [`RgbaImage::put`], and the same on
+//! [`GrayImage`]) copies the buffer if it is still shared
+//! ([`Arc::make_mut`]); the other clones keep the old pixels. Equality
+//! compares contents, short-circuiting on a shared buffer.
 
 use std::fmt;
+use std::sync::Arc;
 
 /// A width × height in pixels.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
@@ -57,7 +69,7 @@ impl std::error::Error for BufferSizeError {}
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct RgbaImage {
     size: Size,
-    data: Vec<u8>,
+    data: Arc<Vec<u8>>,
 }
 
 impl RgbaImage {
@@ -65,7 +77,7 @@ impl RgbaImage {
     pub fn new(size: Size) -> Self {
         Self {
             size,
-            data: vec![0; size.area() * 4],
+            data: Arc::new(vec![0; size.area() * 4]),
         }
     }
 
@@ -73,7 +85,7 @@ impl RgbaImage {
     pub fn filled(size: Size, rgba: [u8; 4]) -> Self {
         Self {
             size,
-            data: rgba.repeat(size.area()),
+            data: Arc::new(rgba.repeat(size.area())),
         }
     }
 
@@ -87,7 +99,10 @@ impl RgbaImage {
                 actual_len: data.len(),
             });
         }
-        Ok(Self { size, data })
+        Ok(Self {
+            size,
+            data: Arc::new(data),
+        })
     }
 
     pub fn size(&self) -> Size {
@@ -107,12 +122,21 @@ impl RgbaImage {
         &self.data
     }
 
+    /// The bytes, for writing. Copies them first if another clone shares
+    /// the buffer.
     pub fn as_raw_mut(&mut self) -> &mut [u8] {
-        &mut self.data
+        Arc::make_mut(&mut self.data).as_mut_slice()
     }
 
+    /// The bytes, copied only if another clone shares the buffer.
     pub fn into_raw(self) -> Vec<u8> {
-        self.data
+        Arc::unwrap_or_clone(self.data)
+    }
+
+    /// Whether `self` and `other` share one pixel buffer (see the
+    /// [module docs](self)). Equal images need not share.
+    pub fn shares_buffer(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.data, &other.data)
     }
 
     /// The pixel at `(x, y)`. Panics if out of bounds.
@@ -121,10 +145,12 @@ impl RgbaImage {
         self.data[i..i + 4].try_into().unwrap()
     }
 
-    /// Sets the pixel at `(x, y)`. Panics if out of bounds.
+    /// Sets the pixel at `(x, y)`. Panics if out of bounds. Copies the
+    /// buffer first if it is shared; for many writes, prefer
+    /// [`as_raw_mut`](Self::as_raw_mut).
     pub fn put(&mut self, x: u32, y: u32, rgba: [u8; 4]) {
         let i = self.index(x, y);
-        self.data[i..i + 4].copy_from_slice(&rgba);
+        self.as_raw_mut()[i..i + 4].copy_from_slice(&rgba);
     }
 
     fn index(&self, x: u32, y: u32) -> usize {
@@ -148,7 +174,7 @@ impl fmt::Debug for RgbaImage {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct GrayImage {
     size: Size,
-    data: Vec<u8>,
+    data: Arc<Vec<u8>>,
 }
 
 impl GrayImage {
@@ -156,7 +182,7 @@ impl GrayImage {
     pub fn filled(size: Size, value: u8) -> Self {
         Self {
             size,
-            data: vec![value; size.area()],
+            data: Arc::new(vec![value; size.area()]),
         }
     }
 
@@ -169,7 +195,10 @@ impl GrayImage {
                 actual_len: data.len(),
             });
         }
-        Ok(Self { size, data })
+        Ok(Self {
+            size,
+            data: Arc::new(data),
+        })
     }
 
     pub fn size(&self) -> Size {
@@ -180,12 +209,21 @@ impl GrayImage {
         &self.data
     }
 
+    /// The bytes, for writing. Copies them first if another clone shares
+    /// the buffer.
     pub fn as_raw_mut(&mut self) -> &mut [u8] {
-        &mut self.data
+        Arc::make_mut(&mut self.data).as_mut_slice()
     }
 
+    /// The bytes, copied only if another clone shares the buffer.
     pub fn into_raw(self) -> Vec<u8> {
-        self.data
+        Arc::unwrap_or_clone(self.data)
+    }
+
+    /// Whether `self` and `other` share one pixel buffer (see the
+    /// [module docs](self)). Equal images need not share.
+    pub fn shares_buffer(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.data, &other.data)
     }
 
     /// The value at `(x, y)`. Panics if out of bounds.
@@ -193,10 +231,11 @@ impl GrayImage {
         self.data[self.index(x, y)]
     }
 
-    /// Sets the value at `(x, y)`. Panics if out of bounds.
+    /// Sets the value at `(x, y)`. Panics if out of bounds. Copies the
+    /// buffer first if it is shared.
     pub fn put(&mut self, x: u32, y: u32, value: u8) {
         let i = self.index(x, y);
-        self.data[i] = value;
+        self.as_raw_mut()[i] = value;
     }
 
     fn index(&self, x: u32, y: u32) -> usize {
@@ -239,6 +278,36 @@ mod tests {
         m.put(1, 1, 200);
         assert_eq!(m.get(1, 1), 200);
         assert_eq!(m.as_raw()[4], 200);
+    }
+
+    #[test]
+    fn clones_share_until_written() {
+        let mut a = RgbaImage::filled(Size::new(2, 2), [1, 2, 3, 4]);
+        let b = a.clone();
+        assert!(a.shares_buffer(&b));
+        assert_eq!(a.as_raw().as_ptr(), b.as_raw().as_ptr());
+        a.put(0, 0, [9, 9, 9, 9]);
+        assert!(!a.shares_buffer(&b));
+        assert_eq!(b.get(0, 0), [1, 2, 3, 4]);
+        assert_eq!(a.get(0, 0), [9, 9, 9, 9]);
+        // Unshared writes stay in place.
+        let p = a.as_raw().as_ptr();
+        a.as_raw_mut()[4] = 7;
+        assert_eq!(a.as_raw().as_ptr(), p);
+        // Equality is by content.
+        assert_eq!(
+            RgbaImage::new(Size::new(1, 1)),
+            RgbaImage::new(Size::new(1, 1))
+        );
+        assert_eq!(b.clone().into_raw(), [1, 2, 3, 4].repeat(4));
+
+        let mut m = GrayImage::filled(Size::new(2, 1), 5);
+        let n = m.clone();
+        assert!(m.shares_buffer(&n));
+        m.as_raw_mut()[1] = 6;
+        assert!(!m.shares_buffer(&n));
+        assert_eq!(n.as_raw(), [5, 5]);
+        assert_eq!(m.into_raw(), [5, 6]);
     }
 
     #[test]

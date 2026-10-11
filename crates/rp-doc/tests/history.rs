@@ -457,3 +457,56 @@ fn commit_within_hint_limits_patch() {
         Some((paint, Rect::new(1, 1, 2, 2)))
     );
 }
+
+fn paint_pixels(d: &Document, id: LayerId) -> &RgbaImage {
+    match &d.layer(id).unwrap().kind {
+        rp_doc::LayerKind::Paint(p) => &p.pixels,
+        _ => panic!("not a paint layer"),
+    }
+}
+
+#[test]
+fn snapshots_share_unchanged_rasters_copy_on_write() {
+    let (mut d, paint, _) = doc();
+    d.layer_mut(paint).unwrap().mask = Some(GrayImage::filled(CANVAS, 200));
+    let original = d.clone();
+    // A render-job style clone shares every raster.
+    assert!(paint_pixels(&original, paint).shares_buffer(paint_pixels(&d, paint)));
+
+    let mut h = History::new();
+    h.begin_snapshot(&d);
+    d.swatches.push(Rgb::new(1, 2, 3));
+    assert!(h.commit(&d));
+    // The snapshot step still shares the raster and mask with the document.
+    let mut d2 = d.clone();
+    assert!(h.undo(&mut d2));
+    assert!(paint_pixels(&d2, paint).shares_buffer(paint_pixels(&d, paint)));
+    let (m1, m2) = (
+        d2.layer(paint).unwrap().mask.as_ref().unwrap(),
+        d.layer(paint).unwrap().mask.as_ref().unwrap(),
+    );
+    assert!(m1.shares_buffer(m2));
+    assert!(h.redo(&mut d2));
+
+    // Painting after the snapshot copies the document's raster; the clone
+    // taken earlier keeps the old pixels.
+    h.begin_paint(&d, paint);
+    dab(&mut d, paint, 2, 2, 3, 3, [9, 9, 9, 255]);
+    assert!(h.commit(&d));
+    assert!(!paint_pixels(&original, paint).shares_buffer(paint_pixels(&d, paint)));
+    assert_eq!(paint_pixels(&original, paint).get(2, 2), [2, 2, 7, 255]);
+    assert_eq!(paint_pixels(&d, paint).get(2, 2), [9, 9, 9, 255]);
+
+    // Undo all the way gives the original back byte for byte.
+    while h.undo(&mut d) {}
+    assert_eq!(d, original);
+}
+
+#[test]
+fn begin_paint_without_writes_records_nothing() {
+    let (d, paint, _) = doc();
+    let mut h = History::new();
+    assert!(h.begin_paint(&d, paint));
+    assert!(!h.commit(&d));
+    assert!(!h.can_undo());
+}

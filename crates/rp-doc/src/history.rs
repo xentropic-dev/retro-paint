@@ -6,8 +6,10 @@
 //!   edits: add/remove/reorder/rename layers, visibility, opacity, blend,
 //!   locks, masks (v1), move/transform drags, insert image, filter (dither)
 //!   changes, Project Settings, swatch add/remove. Image layers only hold a
-//!   [`SourceHash`](crate::SourceHash), so they are cheap; paint layers and
-//!   masks are cloned in full and are counted as such.
+//!   [`SourceHash`](crate::SourceHash), so they are cheap. Paint pixels
+//!   and masks are copy-on-write ([`RgbaImage`] keeps them behind an `Arc`),
+//!   so a snapshot shares every raster that is unchanged with the document
+//!   and with other snapshots; only rasters edited later get their own copy.
 //! - **Paint patch**: a layer id, a dirty rectangle in the paint raster's own
 //!   coordinates, and the RGBA pixels of that rectangle. Used for brush and
 //!   eraser strokes. Only the smallest rectangle that contains every changed
@@ -68,6 +70,15 @@
 //! stack is never evicted, and the newest undo step is kept even if it alone
 //! is over budget, so the last edit can always be undone. The open
 //! `begin`/`commit` state is transient and not counted.
+//!
+//! Shared rasters are counted **once per snapshot that holds them**, not
+//! once overall. That makes [`History::memory_used`] an upper bound on the
+//! memory really held (a run of snapshots that only changed settings shares
+//! one copy of each raster but is counted as N), and it keeps each step's
+//! size fixed while it sits in a stack, which the running total and eviction
+//! rely on: how much is shared changes as the document is edited, and a
+//! step's charge must not change under it. The cost is that the budget can
+//! evict earlier than strictly needed; it can never let real use exceed it.
 
 use std::collections::VecDeque;
 use std::mem::size_of;
@@ -280,7 +291,7 @@ fn crop(img: &RgbaImage, rect: Rect) -> Vec<u8> {
 }
 
 /// Approximate heap + inline bytes of a document, counting every paint
-/// pixel and mask byte.
+/// pixel and mask byte, shared or not (see "Memory" in the module docs).
 fn document_bytes(d: &Document) -> usize {
     size_of::<Document>()
         + d.swatches.len() * size_of::<rp_palette_dither::Rgb>()
@@ -450,6 +461,10 @@ impl History {
                     return false;
                 };
                 if p.pixels.size() != before.size() {
+                    return false;
+                }
+                if p.pixels.shares_buffer(&before) {
+                    // Never written since `begin_paint`: nothing changed.
                     return false;
                 }
                 let Some(rect) = dirty_rect(&before, &p.pixels, hint) else {

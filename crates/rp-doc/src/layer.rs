@@ -116,6 +116,7 @@ impl fmt::Display for EditError {
 impl std::error::Error for EditError {}
 
 /// A canvas-sized raster the user paints on, shifted by an integer offset.
+/// Cloning shares the pixel buffer copy-on-write.
 #[derive(Clone, PartialEq, Debug)]
 pub struct PaintLayer {
     pub pixels: RgbaImage,
@@ -154,7 +155,8 @@ pub struct Layer {
     pub blend: BlendMode,
     /// Optional canvas-sized grayscale mask, in **canvas** coordinates (it
     /// does not move with the layer). 255 shows the layer, 0 hides it. Pixels
-    /// outside the mask's size are unmasked.
+    /// outside the mask's size are unmasked. Shared copy-on-write between
+    /// clones, like paint pixels.
     pub mask: Option<GrayImage>,
     pub lock: Lock,
     pub kind: LayerKind,
@@ -209,6 +211,11 @@ impl Layer {
 
     /// The paint raster, for editing. Refused if pixels are locked or this
     /// is not a paint layer.
+    ///
+    /// The raster is copy-on-write (see [`RgbaImage`]): if a history
+    /// snapshot or a render job still shares it, the first write through the
+    /// returned reference copies it (`Arc::make_mut`), leaving their copy
+    /// untouched.
     pub fn pixels_mut(&mut self) -> Result<&mut RgbaImage, EditError> {
         if self.lock.pixels {
             return Err(EditError::PixelsLocked);
