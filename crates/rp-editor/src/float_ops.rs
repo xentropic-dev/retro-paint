@@ -653,6 +653,24 @@ mod tests {
     }
 
     #[test]
+    fn escape_cancels_float_keeping_selection_then_deselects() {
+        let mut st = editor();
+        let before = st.document.clone();
+        let sel = st.selection.selection().clone();
+        assert!(drag(&mut st, (9.0, 9.0), (5.0, 5.0), false));
+        assert!(st.is_floating());
+        assert!(st.escape(), "first Escape cancels the float");
+        assert!(!st.is_floating());
+        assert_eq!(st.document, before);
+        assert_eq!(st.selection.selection(), &sel, "selection kept");
+        assert_eq!(st.history.undo_len(), 0);
+        assert!(st.escape(), "second Escape deselects");
+        assert!(st.selection.selection().is_empty());
+        assert_eq!(st.document, before);
+        assert_eq!(st.history.undo_len(), 0);
+    }
+
+    #[test]
     fn unmoved_float_commits_nothing() {
         let mut st = editor();
         let before = st.document.clone();

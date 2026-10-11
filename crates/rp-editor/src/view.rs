@@ -838,14 +838,11 @@ impl EditorView {
             "enter" if s.renaming.is_none() && s.is_floating() => {
                 self.edit(cx, |s| s.commit_float());
             }
-            "escape" if s.renaming.is_none() && s.is_floating() => {
-                self.edit(cx, |s| s.cancel_float());
-            }
             "enter" if s.renaming.is_none() && s.selection.draft.is_some() => {
                 self.edit(cx, |s| s.finish_lasso());
             }
-            "escape" if s.renaming.is_none() && s.selection.draft.is_some() => {
-                self.edit(cx, |s| s.cancel_select_draft());
+            "escape" if plain => {
+                self.edit(cx, |s| s.escape());
             }
             "delete" | "backspace" if plain && s.renaming.is_none() => {
                 self.edit(cx, |s| s.edit_command(EditCommand::Clear));

@@ -537,7 +537,7 @@ impl EditorState {
     }
 
     /// Whether undo/redo are blocked by a modal dialog.
-    fn history_blocked(&self) -> bool {
+    pub(crate) fn history_blocked(&self) -> bool {
         self.file_modal_open() || self.project_dialog.is_some() || self.color_picker.is_some()
     }
 

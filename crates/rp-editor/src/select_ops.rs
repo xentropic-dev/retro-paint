@@ -26,6 +26,10 @@
 //!   the selection.
 //! - **Ctrl+A** selects the whole canvas, **Ctrl+D** (Edit > Deselect)
 //!   clears it. Both drop an unfinished outline.
+//! - **Escape** goes one step per press: a dialog, the color picker, a
+//!   rename or a Project Settings field keeps it; else an unfinished outline
+//!   is dropped; else a float is cancelled (layer restored, selection kept);
+//!   else the selection is cleared like Ctrl+D.
 //! - **Selection is per document and not an undo step.** It survives tool
 //!   switches, and New, Open and a canvas resize (Project Settings, or an
 //!   undo/redo that changes the canvas size) drop it.
@@ -540,6 +544,29 @@ impl EditorState {
         self.selection.draft.take().is_some()
     }
 
+    /// Escape on the canvas, one step per press: drops an unfinished
+    /// outline, else cancels a float (the selection stays), else clears the
+    /// selection like Ctrl+D (not an undo step). Nothing while a dialog,
+    /// the color picker or a rename owns the key. Returns whether it did
+    /// something.
+    pub fn escape(&mut self) -> bool {
+        if self.renaming.is_some() || self.history_blocked() {
+            return false;
+        }
+        if self.cancel_select_draft() {
+            self.status = "Outline cancelled".into();
+            return true;
+        }
+        if self.cancel_float() {
+            return true;
+        }
+        if self.selection.selection().is_empty() {
+            return false;
+        }
+        self.deselect();
+        true
+    }
+
     /// Ctrl+A.
     pub fn select_all(&mut self) {
         self.settle_float();
@@ -909,6 +936,54 @@ mod tests {
         assert!(st.cancel_select_draft());
         assert!(!st.cancel_select_draft());
         assert_eq!(st.selection.selection(), &before);
+    }
+
+    #[test]
+    fn escape_drops_outline_then_deselects_without_undo_step() {
+        let mut st = editor();
+        st.select_all();
+        let all = st.selection.selection().clone();
+        st.select_tool(Tool::Lasso);
+        click(&mut st, 1.0, 1.0, 1);
+        click(&mut st, 9.0, 1.0, 1);
+        assert!(st.escape(), "first Escape drops the outline");
+        assert!(st.selection.draft.is_none());
+        assert_eq!(st.selection.selection(), &all, "selection kept");
+        assert!(st.escape(), "second Escape deselects");
+        assert!(st.selection.selection().is_empty());
+        assert_eq!(st.history.undo_len(), 0);
+        assert!(!st.is_dirty());
+        assert!(!st.escape(), "nothing left to do");
+
+        // A rect outline mid-drag is dropped the same way.
+        st.select_tool(Tool::RectSelect);
+        let p = at(&st, 2.0, 2.0);
+        st.pointer_moved(p);
+        st.begin_select(p, false, false, 1);
+        st.pointer_moved(at(&st, 8.0, 8.0));
+        assert!(st.escape());
+        assert!(st.selection.draft.is_none());
+        assert!(st.selection.selection().is_empty());
+    }
+
+    #[test]
+    fn escape_is_left_to_rename_dialogs_and_picker() {
+        let mut st = editor();
+        st.select_all();
+        let id = st.document.layers()[0].id();
+        st.begin_rename(id);
+        assert!(st.renaming.is_some());
+        assert!(!st.escape());
+        st.cancel_rename();
+        st.open_color_picker(crate::color_picker_ops::PickerTarget::Foreground);
+        assert!(!st.escape());
+        st.cancel_color_picker();
+        st.open_project_settings();
+        assert!(!st.escape());
+        st.cancel_project_settings();
+        assert!(!st.selection.selection().is_empty());
+        assert!(st.escape());
+        assert!(st.selection.selection().is_empty());
     }
 
     #[test]
