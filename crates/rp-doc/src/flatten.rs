@@ -7,13 +7,21 @@
 //! nothing from the layer, so image edges are hard rather than fringed. At an
 //! identity transform with integer translation, bilinear samples land exactly
 //! on texel centers, so pixels pass through unchanged.
+//!
+//! Performance: the canvas is rendered row by row through a row-sized `f32`
+//! accumulator, in horizontal bands on scoped threads for large canvases.
+//! Shortcuts (a lone unmasked 100% paint layer copies bytes; an opaque
+//! source over a transparent or opaque backdrop skips the general formula)
+//! are exact, so the output is byte-identical to the plain per-pixel
+//! composite kept in `tests/reference_flatten`.
 
 use std::collections::HashMap;
+use std::ops::Range;
 use std::sync::Arc;
 
-use crate::blend::{BlendMode, byte, unit};
+use crate::blend::{BlendMode, byte, composite_fast, unit};
 use crate::document::Document;
-use crate::layer::{ImageLayer, LayerKind, PaintLayer, SourceHash, Transform};
+use crate::layer::{Layer, LayerKind, SourceHash, Transform};
 use crate::raster::{GrayImage, RgbaImage, Size};
 
 /// Decoded source images for image layers, keyed by hash. The caller loads
@@ -85,96 +93,275 @@ impl Document {
     }
 }
 
+/// Most threads a single flatten uses; leaves cores for the UI and DOS
+/// threads.
+const MAX_THREADS: usize = 8;
+
+/// Below this many layer-pixels a flatten runs on the calling thread;
+/// spawning would cost more than it saves.
+const PARALLEL_MIN_WORK: usize = 1 << 16;
+
 /// See [`Document::flatten`].
+///
+/// Large canvases are split into horizontal bands rendered on scoped
+/// threads. Every output pixel depends only on the layer pixels above it, and
+/// each band runs exactly the same per-pixel operations in the same order,
+/// so the result does not depend on the thread count.
 pub fn flatten(doc: &Document, sources: &SourceStore) -> RgbaImage {
+    let work = doc.canvas_size.area() * doc.layers().len().max(1);
+    let threads = if work < PARALLEL_MIN_WORK {
+        1
+    } else {
+        std::thread::available_parallelism().map_or(1, |n| n.get().min(MAX_THREADS))
+    };
+    flatten_with_threads(doc, sources, threads)
+}
+
+/// [`flatten`] with an explicit band/thread count (clamped to the canvas
+/// height). The output is the same for every count; exposed for tests and
+/// benchmarks.
+#[doc(hidden)]
+pub fn flatten_with_threads(doc: &Document, sources: &SourceStore, threads: usize) -> RgbaImage {
     let size = doc.canvas_size;
-    let mut acc = vec![[0.0f32; 4]; size.area()];
-    for layer in doc.layers() {
-        if !layer.visible || layer.opacity == 0 {
-            continue;
-        }
-        let ctx = LayerCtx {
-            canvas: size,
-            opacity: layer.opacity_unit(),
-            mask: layer.mask.as_ref(),
-            blend: layer.blend,
-        };
-        match &layer.kind {
-            LayerKind::Paint(p) => draw_paint(&mut acc, &ctx, p),
-            LayerKind::Image(i) => {
-                if let Some(src) = sources.get(&i.source) {
-                    draw_image(&mut acc, &ctx, i, src);
-                }
+    let mut out = vec![0u8; size.area() * 4];
+    let draws: Vec<Draw> = doc
+        .layers()
+        .iter()
+        .filter_map(|l| Draw::new(l, sources, size))
+        .collect();
+    if !draws.is_empty() && size.area() > 0 {
+        let rows = size.height as usize;
+        let row_bytes = size.width as usize * 4;
+        let bands = threads.clamp(1, rows);
+        let band_rows = rows.div_ceil(bands);
+        let mut chunks = out
+            .chunks_mut(band_rows * row_bytes)
+            .enumerate()
+            .map(|(i, c)| (i * band_rows, c));
+        let (first_y, first) = chunks.next().expect("non-empty canvas");
+        std::thread::scope(|s| {
+            for (y, chunk) in chunks {
+                let draws = &draws;
+                s.spawn(move || render_rows(draws, size, y, chunk));
             }
-        }
-    }
-    let mut out = Vec::with_capacity(size.area() * 4);
-    for px in &acc {
-        if px[3] <= 0.0 {
-            out.extend_from_slice(&[0, 0, 0, 0]);
-        } else {
-            out.extend(px.map(byte));
-        }
+            render_rows(&draws, size, first_y, first);
+        });
     }
     RgbaImage::from_raw(size, out).expect("sized from canvas")
 }
 
-struct LayerCtx<'a> {
-    canvas: Size,
-    opacity: f32,
-    mask: Option<&'a GrayImage>,
-    blend: BlendMode,
-}
-
-impl LayerCtx<'_> {
-    fn put(&self, acc: &mut [[f32; 4]], x: u32, y: u32, mut src: [f32; 4]) {
-        let m = match self.mask {
-            Some(m) if x < m.size().width && y < m.size().height => unit(m.get(x, y)),
-            _ => 1.0,
-        };
-        src[3] *= self.opacity * m;
-        let i = y as usize * self.canvas.width as usize + x as usize;
-        self.blend.composite(&mut acc[i], src);
-    }
-}
-
-fn draw_paint(acc: &mut [[f32; 4]], ctx: &LayerCtx, p: &PaintLayer) {
-    let ls = p.pixels.size();
-    // Canvas range covered by the raster, clipped to the canvas.
-    let span = |offset: i32, len: u32, canvas: u32| {
-        let lo = (offset as i64).max(0);
-        let hi = (offset as i64 + len as i64).min(canvas as i64);
-        lo..hi.max(lo)
-    };
-    let data = p.pixels.as_raw();
-    for y in span(p.offset_y, ls.height, ctx.canvas.height) {
-        let ly = (y - p.offset_y as i64) as usize;
-        for x in span(p.offset_x, ls.width, ctx.canvas.width) {
-            let lx = (x - p.offset_x as i64) as usize;
-            let i = (ly * ls.width as usize + lx) * 4;
-            let px = [data[i], data[i + 1], data[i + 2], data[i + 3]];
-            if px[3] == 0 {
-                continue;
+/// Composites rows `y0..` (as many as fit in `out`) into `out`, one row at a
+/// time through a row-sized `f32` accumulator.
+fn render_rows(draws: &[Draw], canvas: Size, y0: usize, out: &mut [u8]) {
+    let width = canvas.width as usize;
+    let mut acc = vec![[0.0f32; 4]; width];
+    for (r, row_out) in out.chunks_exact_mut(width * 4).enumerate() {
+        let y = (y0 + r) as u32;
+        let mut active = draws.iter().filter(|d| d.touches_row(y));
+        if let (Some(only), None) = (active.next(), active.next())
+            && let Some((xs, src)) = only.passthrough_row(y)
+        {
+            copy_row(&mut row_out.as_chunks_mut::<4>().0[xs], src);
+            continue;
+        }
+        acc.fill([0.0; 4]);
+        for d in draws {
+            d.draw_row(&mut acc, y);
+        }
+        for (px, o) in acc.iter().zip(row_out.as_chunks_mut::<4>().0) {
+            // `out` starts zeroed, so transparent pixels need no write.
+            if px[3] > 0.0 {
+                *o = px.map(byte);
             }
-            ctx.put(acc, x as u32, y as u32, px.map(unit));
         }
     }
 }
 
-fn draw_image(acc: &mut [[f32; 4]], ctx: &LayerCtx, layer: &ImageLayer, src: &RgbaImage) {
-    let Some(map) = InverseMap::new(&layer.transform, src.size()) else {
-        return;
-    };
-    let Some((x0, y0, x1, y1)) = map.canvas_bounds(ctx.canvas) else {
-        return;
-    };
-    for y in y0..y1 {
-        for x in x0..x1 {
-            let (sx, sy) = map.source_point(x as f32 + 0.5, y as f32 + 0.5);
-            if let Some(px) = sample_bilinear(src, sx, sy)
-                && px[3] > 0.0
-            {
-                ctx.put(acc, x, y, px);
+/// A lone unmasked 100% paint layer over the transparent canvas: the
+/// composite gives back each pixel's own bytes (`byte((α·Cs)/α) = Cs` for
+/// every 8-bit `Cs` and `α > 0`, checked exhaustively by the reference
+/// tests), and fully transparent pixels stay zero.
+fn copy_row(out: &mut [[u8; 4]], src: &[[u8; 4]]) {
+    for (o, px) in out.iter_mut().zip(src) {
+        if px[3] != 0 {
+            *o = *px;
+        }
+    }
+}
+
+/// One visible layer, prepared for drawing row by row.
+struct Draw<'a> {
+    opacity: f32,
+    mask: Option<&'a GrayImage>,
+    blend: BlendMode,
+    kind: DrawKind<'a>,
+}
+
+enum DrawKind<'a> {
+    Paint {
+        pixels: &'a RgbaImage,
+        offset_x: i64,
+        offset_y: i64,
+        /// Canvas columns covered by the raster.
+        xs: Range<usize>,
+    },
+    Image {
+        src: &'a RgbaImage,
+        map: InverseMap,
+        /// Canvas pixel range `[x0, x1) × [y0, y1)` that can hit the image.
+        bounds: (u32, u32, u32, u32),
+    },
+}
+
+impl<'a> Draw<'a> {
+    /// `None` if the layer cannot draw anything.
+    fn new(layer: &'a Layer, sources: &'a SourceStore, canvas: Size) -> Option<Self> {
+        if !layer.visible || layer.opacity == 0 {
+            return None;
+        }
+        let kind = match &layer.kind {
+            LayerKind::Paint(p) => {
+                let lo = (p.offset_x as i64).max(0);
+                let hi = (p.offset_x as i64 + p.pixels.width() as i64).min(canvas.width as i64);
+                if hi <= lo {
+                    return None;
+                }
+                DrawKind::Paint {
+                    pixels: &p.pixels,
+                    offset_x: p.offset_x as i64,
+                    offset_y: p.offset_y as i64,
+                    xs: lo as usize..hi as usize,
+                }
+            }
+            LayerKind::Image(i) => {
+                let src = sources.get(&i.source)?;
+                let map = InverseMap::new(&i.transform, src.size())?;
+                let bounds = map.canvas_bounds(canvas)?;
+                DrawKind::Image { src, map, bounds }
+            }
+        };
+        Some(Self {
+            opacity: layer.opacity_unit(),
+            mask: layer.mask.as_ref(),
+            blend: layer.blend,
+            kind,
+        })
+    }
+
+    /// The mask values for canvas row `y`, if the mask reaches that row.
+    /// Columns past the returned slice are unmasked.
+    fn mask_row(&self, y: u32) -> &'a [u8] {
+        match self.mask {
+            Some(m) if y < m.size().height => {
+                let w = m.size().width as usize;
+                &m.as_raw()[y as usize * w..][..w]
+            }
+            _ => &[],
+        }
+    }
+
+    /// Whether this layer can draw anything on canvas row `y`.
+    fn touches_row(&self, y: u32) -> bool {
+        match &self.kind {
+            DrawKind::Paint {
+                pixels, offset_y, ..
+            } => (*offset_y..*offset_y + pixels.height() as i64).contains(&(y as i64)),
+            DrawKind::Image {
+                bounds: (_, y0, _, y1),
+                ..
+            } => (*y0..*y1).contains(&y),
+        }
+    }
+
+    /// For a paint layer at 100% opacity with no mask on row `y`: the canvas
+    /// columns it covers and its pixels there. Only call when the row
+    /// touches this layer.
+    fn passthrough_row(&self, y: u32) -> Option<(Range<usize>, &'a [[u8; 4]])> {
+        match &self.kind {
+            DrawKind::Paint {
+                pixels,
+                offset_x,
+                offset_y,
+                xs,
+            } if self.opacity == 1.0 && self.mask_row(y).len() <= xs.start => {
+                let ly = (y as i64 - offset_y) as usize;
+                let lw = pixels.width() as usize;
+                let lx0 = (xs.start as i64 - offset_x) as usize;
+                let row = &pixels.as_raw()[ly * lw * 4..][..lw * 4];
+                Some((xs.clone(), &row.as_chunks::<4>().0[lx0..lx0 + xs.len()]))
+            }
+            _ => None,
+        }
+    }
+
+    /// Composites this layer into `acc`, the accumulator for canvas row `y`.
+    fn draw_row(&self, acc: &mut [[f32; 4]], y: u32) {
+        let mask = self.mask_row(y);
+        // Effective alpha factor, computed exactly like `opacity * m` with
+        // `m = 1.0` outside the mask.
+        let factor = |x: usize| match mask.get(x) {
+            Some(&m) => self.opacity * unit(m),
+            None => self.opacity,
+        };
+        match &self.kind {
+            DrawKind::Paint {
+                pixels,
+                offset_x,
+                offset_y,
+                xs,
+            } => {
+                let ly = y as i64 - offset_y;
+                if ly < 0 || ly >= pixels.height() as i64 {
+                    return;
+                }
+                let lw = pixels.width() as usize;
+                let lx0 = (xs.start as i64 - offset_x) as usize;
+                let row = &pixels.as_raw()[ly as usize * lw * 4..][..lw * 4];
+                let row = &row.as_chunks::<4>().0[lx0..lx0 + xs.len()];
+                let acc = &mut acc[xs.clone()];
+                if mask.len() <= xs.start {
+                    // Unmasked row: one factor for every pixel, and at 100%
+                    // opacity `α × 1.0` is `α`, so skip the multiply.
+                    let opacity = self.opacity;
+                    for (dst, px) in acc.iter_mut().zip(row) {
+                        if px[3] == 0 {
+                            continue;
+                        }
+                        let mut src = px.map(unit);
+                        if opacity != 1.0 {
+                            src[3] *= opacity;
+                        }
+                        composite_fast(self.blend, dst, src);
+                    }
+                } else {
+                    for ((x, dst), px) in xs.clone().zip(acc).zip(row) {
+                        if px[3] == 0 {
+                            continue;
+                        }
+                        let mut src = px.map(unit);
+                        src[3] *= factor(x);
+                        composite_fast(self.blend, dst, src);
+                    }
+                }
+            }
+            DrawKind::Image {
+                src,
+                map,
+                bounds: (x0, y0, x1, y1),
+            } => {
+                if y < *y0 || y >= *y1 {
+                    return;
+                }
+                let py = y as f32 + 0.5;
+                for x in *x0..*x1 {
+                    let (sx, sy) = map.source_point(x as f32 + 0.5, py);
+                    if let Some(mut px) = sample_bilinear(src, sx, sy)
+                        && px[3] > 0.0
+                    {
+                        px[3] *= factor(x as usize);
+                        composite_fast(self.blend, &mut acc[x as usize], px);
+                    }
+                }
             }
         }
     }

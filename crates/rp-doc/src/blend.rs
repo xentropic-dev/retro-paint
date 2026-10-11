@@ -100,14 +100,61 @@ fn screen(a: f32, b: f32) -> f32 {
     a + b - a * b
 }
 
+/// [`unit`] for every byte, computed once (same IEEE division, so the
+/// values are identical).
+pub(crate) const UNIT: [f32; 256] = {
+    let mut t = [0.0f32; 256];
+    let mut i = 0;
+    while i < 256 {
+        t[i] = i as f32 / 255.0;
+        i += 1;
+    }
+    t
+};
+
 /// 8-bit channel to `0.0..=1.0`.
+#[inline]
 pub(crate) fn unit(v: u8) -> f32 {
-    v as f32 / 255.0
+    UNIT[v as usize]
 }
 
-/// `0.0..=1.0` to the nearest 8-bit value.
+/// `0.0..=1.0` to the nearest 8-bit value, halves away from zero.
+///
+/// Same result as `(v.clamp(0.0, 1.0) * 255.0).round() as u8`, without the
+/// `roundf` call: for `x` in `0.0..=255.0`, `x - trunc(x)` is exact, so
+/// comparing it with 0.5 decides the rounding exactly. NaN gives 0, as
+/// before.
+#[inline]
 pub(crate) fn byte(v: f32) -> u8 {
-    (v.clamp(0.0, 1.0) * 255.0).round() as u8
+    let x = v.clamp(0.0, 1.0) * 255.0;
+    let t = x as u32;
+    (t + (x - t as f32 >= 0.5) as u32) as u8
+}
+
+/// [`BlendMode::composite`] with shortcuts for an opaque source over a fully
+/// transparent or fully opaque backdrop, the bulk of most canvases.
+///
+/// Exact, not approximate: with `αs = 1` and `αb ∈ {0, 1}` every dropped
+/// term of the general formula is a multiplication by zero, an addition of
+/// zero, or a division by one, so the result is bit-identical.
+#[inline]
+pub(crate) fn composite_fast(mode: BlendMode, dst: &mut [f32; 4], src: [f32; 4]) {
+    if src[3] == 1.0 {
+        let a_b = dst[3];
+        if a_b == 0.0 {
+            // Over transparent every mode is normal: Co = Cs.
+            *dst = [src[0], src[1], src[2], 1.0];
+            return;
+        }
+        if a_b == 1.0 {
+            // Opaque over opaque: Co = B(Cb, Cs).
+            for c in 0..3 {
+                dst[c] = mode.blend_channel(dst[c], src[c]);
+            }
+            return;
+        }
+    }
+    mode.composite(dst, src);
 }
 
 #[cfg(test)]
@@ -122,6 +169,72 @@ mod tests {
         let mut d = px(dst);
         mode.composite(&mut d, px(src));
         d.map(byte)
+    }
+
+    fn byte_reference(v: f32) -> u8 {
+        (v.clamp(0.0, 1.0) * 255.0).round() as u8
+    }
+
+    #[test]
+    fn unit_table_matches_division() {
+        for v in 0..=255u8 {
+            assert_eq!(unit(v).to_bits(), (v as f32 / 255.0).to_bits());
+        }
+    }
+
+    #[test]
+    fn byte_matches_round() {
+        let check = |v: f32| assert_eq!(byte(v), byte_reference(v), "{v:e}");
+        // Every exact level, every rounding midpoint, and their neighbours.
+        for k in 0..=510u32 {
+            let mid = k as f32 / 510.0;
+            for x in [mid, mid * (1.0 / 255.0) * 255.0] {
+                let bits = x.to_bits() as i64;
+                for d in -64..=64 {
+                    let b = (bits + d).max(0) as u32;
+                    check(f32::from_bits(b));
+                }
+            }
+        }
+        // Midpoints in the scaled domain: (k + 0.5) / 255 and neighbours.
+        for k in 0..255u32 {
+            let x = (k as f32 + 0.5) / 255.0;
+            for d in -256..=256i64 {
+                check(f32::from_bits((x.to_bits() as i64 + d) as u32));
+            }
+        }
+        // A dense sweep and out-of-range values.
+        for i in 0..=1_000_000u32 {
+            check(i as f32 / 1_000_000.0);
+        }
+        for v in [-1.0, -0.0, 1.5, f32::INFINITY, f32::NEG_INFINITY, f32::NAN] {
+            check(v);
+        }
+    }
+
+    #[test]
+    fn composite_fast_is_bit_identical() {
+        let levels = [0u8, 1, 2, 60, 127, 128, 129, 200, 254, 255];
+        for m in BlendMode::ALL {
+            for &cs in &levels {
+                for &cb in &levels {
+                    for &a_b in &[0u8, 255, 128] {
+                        for &a_s in &[255u8, 128, 1] {
+                            let src = [unit(cs), unit(255 - cs), unit(cs / 2), unit(a_s)];
+                            let dst = if a_b == 0 {
+                                [0.0; 4]
+                            } else {
+                                [unit(cb), unit(cs), unit(255 - cb), unit(a_b)]
+                            };
+                            let (mut slow, mut fast) = (dst, dst);
+                            m.composite(&mut slow, src);
+                            composite_fast(m, &mut fast, src);
+                            assert_eq!(slow.map(f32::to_bits), fast.map(f32::to_bits));
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]
