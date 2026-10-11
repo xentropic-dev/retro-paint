@@ -19,6 +19,7 @@ use crate::layer_ops::RenameEdit;
 use crate::paint_ops::{BrushState, Stroke};
 use crate::panel_layout::{PanelSection, PanelSections};
 use crate::project_ops::ProjectDraft;
+use crate::render_worker::SnapshotCounter;
 use crate::select_ops::SelectionState;
 use crate::transform_ops::TransformDrag;
 use crate::undo_ops::UndoHistory;
@@ -229,6 +230,10 @@ pub struct EditorState {
     pub brushes: BrushLibrary,
     /// Brush or Eraser stroke in progress.
     pub stroke: Option<Stroke>,
+    /// Render snapshots the worker still holds; while any is out, strokes
+    /// queue dabs instead of copying the shared layer (see
+    /// [`crate::render_worker`], "Snapshot leases").
+    pub snapshots: SnapshotCounter,
     /// Move / Select drag in progress.
     pub transform_drag: Option<TransformDrag>,
     /// The document's selection and the outline being drawn (see
@@ -304,6 +309,7 @@ impl EditorState {
             brush: BrushState::default(),
             brushes: BrushLibrary::new(),
             stroke: None,
+            snapshots: SnapshotCounter::default(),
             transform_drag: None,
             selection: SelectionState::new(s),
             floating: None,

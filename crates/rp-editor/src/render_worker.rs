@@ -1,38 +1,50 @@
-//! The render worker: turns document changes into DOS frames off the UI
-//! thread. See docs/tech-stack.md, "Data flow between views".
+//! The render worker: turns document changes into canvas images and DOS
+//! frames off the UI thread. See docs/tech-stack.md, "Data flow between
+//! views".
 //!
-//! The UI thread never flattens or dithers for the DOS view. When
+//! The UI thread never flattens or dithers. When
 //! [`EditorState::doc_version`] changes it snapshots what the pipeline needs
 //! ([`RenderJob`]: a clone of the [`Document`] plus the shared
 //! `Arc<SourceStore>`) and hands it over; when only the pointer, tool or
 //! foreground color changed it hands over a new [`Overlay`]. Both are cheap.
 //!
-//! The worker thread owns a [`Renderer`] (cached LUT). Requests coalesce:
-//! only the newest pending job and the newest overlay are kept, so a burst of
-//! edits renders once. Each wake-up flattens + dithers the pending job (if
-//! any), then sends one [`FrameMsg`] built from the last indexed image and
-//! the newest overlay. An overlay-only wake-up re-sends the last image
-//! without re-dithering.
+//! Two stages, one thread each, so the canvas never waits for the dither:
 //!
-//! The same flatten also feeds the editor canvas: each render publishes a
-//! [`CanvasFrame`] (the flattened image, already BGRA for GPUI, tagged with
-//! its `doc_version`) to a latest-only [`LatestSlot`] and wakes the
-//! [`CanvasReceiver`] the view awaits. The UI thread never flattens.
+//! 1. **Flatten** (thread `render-worker`): flattens the newest job, drops
+//!    the snapshot at once (releasing its rasters, see below), publishes the
+//!    flattened image as a [`CanvasFrame`] (BGRA for GPUI, tagged with its
+//!    `doc_version`) to a latest-only [`LatestSlot`], wakes the
+//!    [`CanvasReceiver`] the view awaits, then hands the RGBA to stage 2.
+//! 2. **Dither** (thread `render-dos`): owns a [`Renderer`] (cached LUT),
+//!    downscales + dithers the newest flattened image and sends one
+//!    [`FrameMsg`] built from the last indexed image and the newest overlay.
+//!    An overlay-only wake-up re-sends the last image without re-dithering.
 //!
-//! Shutdown: [`RenderWorker::shutdown`] (also on drop) wakes the thread,
-//! lets it finish the frame in progress, and joins it.
+//! Requests coalesce at both stages: only the newest pending job, image and
+//! overlay are kept, so a burst of edits renders once.
+//!
+//! **Snapshot leases.** A snapshot shares the document's rasters
+//! copy-on-write, so a stroke writing to the layer while the worker still
+//! holds a snapshot would copy the whole layer (4 MB at 800×1280) on the UI
+//! thread. Each [`RenderJob`] holds a [`SnapshotLease`] from the state's
+//! [`SnapshotCounter`]; it is released with the snapshot right after the
+//! flatten, before the canvas frame is published. While a lease is out,
+//! strokes queue their dabs instead of writing (see
+//! [`EditorState::continue_stroke`]) and lay them when the frame arrives
+//! ([`EditorState::flush_stroke`]) or on the next pointer event.
+//!
+//! Shutdown: [`RenderWorker::shutdown`] (also on drop) wakes both threads,
+//! lets them finish the frame in progress, and joins them.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
-#[cfg(test)]
-use std::time::Duration;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use rp_doc::{Document, FrameMsg, IndexedFrame, Layout, OutputPoint, Size, SourceStore, Tool};
-use rp_palette_dither::{CgaColor, Palette, Renderer, Rgb};
+use rp_palette_dither::{CgaColor, DitherSettings, Palette, Renderer, Rgb};
 
-use crate::canvas_image::rgba_into_bgra;
+use crate::canvas_image::rgba_bytes_to_bgra;
 use crate::paint_ops::brush_output_diameter;
 use crate::state::EditorState;
 use crate::viewport::Vec2;
@@ -45,6 +57,42 @@ pub type FrameSink = Box<dyn FnMut(FrameMsg) + Send>;
 /// image is shown and how long taking it cost the UI thread.
 pub const TIMING_ENV: &str = "RP_RENDER_TIMING";
 
+/// Counts the render snapshots alive (posted to the worker and not yet
+/// flattened). Clones share the count.
+#[derive(Clone, Debug, Default)]
+pub struct SnapshotCounter(Arc<AtomicUsize>);
+
+impl SnapshotCounter {
+    /// A lease for one more snapshot; dropping it gives it back.
+    pub fn lease(&self) -> SnapshotLease {
+        self.0.fetch_add(1, Ordering::AcqRel);
+        SnapshotLease(self.0.clone())
+    }
+
+    /// Whether any snapshot (and so possibly the document's rasters) is
+    /// still held by the worker.
+    pub fn busy(&self) -> bool {
+        self.0.load(Ordering::Acquire) > 0
+    }
+}
+
+/// One snapshot's share of a [`SnapshotCounter`]; see the module docs.
+#[derive(Debug)]
+pub struct SnapshotLease(Arc<AtomicUsize>);
+
+impl Clone for SnapshotLease {
+    fn clone(&self) -> Self {
+        self.0.fetch_add(1, Ordering::AcqRel);
+        Self(self.0.clone())
+    }
+}
+
+impl Drop for SnapshotLease {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 /// What the pipeline needs to re-dither: a snapshot of the document.
 #[derive(Clone, Debug)]
 pub struct RenderJob {
@@ -54,20 +102,80 @@ pub struct RenderJob {
     pub version: u64,
     /// When the UI thread asked for it (for latency logging).
     pub requested: Instant,
+    /// Held until the snapshot is dropped (right after the flatten).
+    pub lease: SnapshotLease,
 }
 
 impl RenderJob {
     /// The state's [`render_snapshot`](EditorState::render_snapshot): a
     /// floating selection is drawn as a temporary layer.
     pub fn from_state(state: &EditorState) -> Self {
+        let lease = state.snapshots.lease();
         let (document, sources) = state.render_snapshot();
         Self {
             document,
             sources,
             version: state.doc_version,
             requested: Instant::now(),
+            lease,
         }
     }
+}
+
+/// A flattened document on its way to the dither stage.
+#[derive(Clone, Debug)]
+pub struct Flat {
+    pub version: u64,
+    /// Straight RGBA8 at `canvas` size.
+    pub rgba: Vec<u8>,
+    pub canvas: Size,
+    pub output: Size,
+    pub dither: DitherSettings,
+    /// When the UI thread asked for it, and how long the flatten took (for
+    /// latency logging).
+    pub requested: Instant,
+    pub flatten: Duration,
+}
+
+/// Stage 1: flattens `job` and drops the snapshot (giving back its lease)
+/// before anything else, then converts for the canvas. Returns the canvas
+/// image and the RGBA for the dither stage.
+pub fn flatten_job(job: RenderJob) -> (CanvasFrame, Flat) {
+    let t = Instant::now();
+    let RenderJob {
+        document,
+        sources,
+        version,
+        requested,
+        lease,
+    } = job;
+    let flat = document.flatten(&sources);
+    let (canvas, output, dither) = (document.canvas_size, document.output_size, document.dither);
+    // Release the rasters first, then the lease, so a stroke that sees the
+    // count drop to zero writes to unshared buffers.
+    drop(document);
+    drop(sources);
+    drop(lease);
+    let flatten = t.elapsed();
+    let (width, height) = (flat.width(), flat.height());
+    let rgba = flat.into_raw();
+    let frame = CanvasFrame {
+        version,
+        width,
+        height,
+        bgra: rgba_bytes_to_bgra(&rgba),
+        requested,
+    };
+    let flat = Flat {
+        version,
+        rgba,
+        canvas,
+        output,
+        dither,
+        requested,
+        flatten,
+    };
+    (frame, flat)
 }
 
 /// The flattened document for the editor canvas, ready for GPUI: straight
@@ -161,16 +269,25 @@ impl CanvasReceiver {
         }
     }
 
+    /// The newest frame published since the last call, without waiting.
+    /// For tests.
+    #[cfg(test)]
+    pub(crate) fn try_take(&self) -> Option<CanvasFrame> {
+        self.slot.take()
+    }
+
     /// Blocks until a frame arrives, the worker shuts down, or `timeout`
     /// passes. For tests.
     #[cfg(test)]
-    fn next_blocking(&self, timeout: Duration) -> Option<CanvasFrame> {
+    pub(crate) fn next_blocking(&self, timeout: Duration) -> Option<CanvasFrame> {
         let deadline = Instant::now() + timeout;
         loop {
             if let Some(f) = self.slot.take() {
                 return Some(f);
             }
-            let closed = self.wake.is_closed() && self.wake.is_empty();
+            // The slot was just checked, so nothing is left once the sender
+            // is gone (a stale wake-up may still sit in the channel).
+            let closed = self.wake.is_closed();
             if closed || Instant::now() >= deadline {
                 return None;
             }
@@ -270,8 +387,8 @@ pub fn cursor_to_output(canvas: Size, output: Size, c: Vec2) -> Option<OutputPoi
     })
 }
 
-/// The worker's single-threaded state: renderer, last image, render count.
-/// Pure apart from the pipeline itself, so it is tested directly.
+/// The dither stage's state: renderer, last image, render count. Pure apart
+/// from the pipeline itself, so it is tested directly.
 #[derive(Default)]
 pub struct WorkerCore {
     renderer: Renderer,
@@ -284,34 +401,32 @@ impl WorkerCore {
         Self::default()
     }
 
-    /// How many times the pipeline ran.
+    /// How many times the dither ran.
     pub fn renders(&self) -> u64 {
         self.renders
     }
 
-    /// Flattens and dithers `job`, keeping the dithered result as the
-    /// current image, and returns the flattened image for the canvas.
-    pub fn render(&mut self, job: &RenderJob) -> CanvasFrame {
-        let doc = &job.document;
-        let flat = doc.flatten(&job.sources);
-        let (width, height) = (flat.width(), flat.height());
-        let c = doc.canvas_size;
-        let o = doc.output_size;
+    /// Stage 2: downscales + dithers `flat`, keeping the result as the
+    /// current image.
+    pub fn dither(&mut self, flat: &Flat) {
+        let (c, o) = (flat.canvas, flat.output);
         let img = self.renderer.render(
-            flat.as_raw(),
+            &flat.rgba,
             (c.width, c.height),
             (o.width, o.height),
-            &doc.dither,
+            &flat.dither,
         );
         self.image = Some(img.into());
         self.renders += 1;
-        CanvasFrame {
-            version: job.version,
-            width,
-            height,
-            bgra: rgba_into_bgra(flat.into_raw()),
-            requested: job.requested,
-        }
+    }
+
+    /// Both stages in one go: flattens and dithers `job`, keeping the
+    /// dithered result as the current image, and returns the flattened
+    /// image for the canvas.
+    pub fn render(&mut self, job: RenderJob) -> CanvasFrame {
+        let (frame, flat) = flatten_job(job);
+        self.dither(&flat);
+        frame
     }
 
     /// The foreground as the nearest color of `palette` (OKLab, through the
@@ -335,16 +450,53 @@ impl WorkerCore {
     }
 }
 
+/// A latest-only request box with a stop flag, for one stage thread.
+struct Mailbox<T> {
+    state: Mutex<(T, bool)>,
+    wake: Condvar,
+}
+
+impl<T: Default> Mailbox<T> {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new((T::default(), false)),
+            wake: Condvar::new(),
+        }
+    }
+
+    fn post(&self, f: impl FnOnce(&mut T)) {
+        let mut s = self.state.lock().expect("render worker lock");
+        f(&mut s.0);
+        drop(s);
+        self.wake.notify_one();
+    }
+
+    fn stop(&self) {
+        self.state.lock().expect("render worker lock").1 = true;
+        self.wake.notify_one();
+    }
+
+    /// Waits until `ready` holds or a stop is asked, then takes the
+    /// contents. `None` on stop.
+    fn wait(&self, ready: impl Fn(&T) -> bool) -> Option<T> {
+        let mut s = self.state.lock().expect("render worker lock");
+        while !s.1 && !ready(&s.0) {
+            s = self.wake.wait(s).expect("render worker lock");
+        }
+        (!s.1).then(|| std::mem::take(&mut s.0))
+    }
+}
+
+/// Pending work for the dither stage.
 #[derive(Default)]
-struct Pending {
-    job: Option<RenderJob>,
+struct DosPending {
+    flat: Option<Flat>,
     overlay: Option<Overlay>,
-    stop: bool,
 }
 
 struct Shared {
-    pending: Mutex<Pending>,
-    wake: Condvar,
+    jobs: Mailbox<Option<RenderJob>>,
+    dos: Mailbox<DosPending>,
     renders: AtomicU64,
 }
 
@@ -356,78 +508,78 @@ pub struct WorkerClient {
 }
 
 impl WorkerClient {
-    /// Asks for a re-dither of `job`, shown with `overlay`. Replaces any job
-    /// not yet started.
+    /// Asks for a re-flatten and re-dither of `job`, shown with `overlay`.
+    /// Replaces any job not yet started.
     pub fn render(&self, job: RenderJob, overlay: Overlay) {
-        self.post(|p| {
-            p.job = Some(job);
-            p.overlay = Some(overlay);
-        });
+        self.shared.jobs.post(|j| *j = Some(job));
+        self.overlay(overlay);
     }
 
     /// Re-sends the last image with a new overlay; no re-dither.
     pub fn overlay(&self, overlay: Overlay) {
-        self.post(|p| p.overlay = Some(overlay));
+        self.shared.dos.post(|p| p.overlay = Some(overlay));
     }
 
-    /// Number of pipeline runs so far.
+    /// Number of dither runs so far.
     pub fn renders(&self) -> u64 {
         self.shared.renders.load(Ordering::Relaxed)
     }
-
-    fn post(&self, f: impl FnOnce(&mut Pending)) {
-        let mut p = self.shared.pending.lock().expect("render worker lock");
-        f(&mut p);
-        drop(p);
-        self.shared.wake.notify_one();
-    }
 }
 
-/// Owns the worker thread. Shut it down (or drop it) to stop and join.
+/// Owns the worker threads. Shut it down (or drop it) to stop and join.
 pub struct RenderWorker {
     shared: Arc<Shared>,
-    thread: Option<JoinHandle<()>>,
+    threads: Vec<JoinHandle<()>>,
 }
 
 impl RenderWorker {
-    /// Starts the worker thread; DOS frames go to `sink`, flattened canvas
+    /// Starts the worker threads; DOS frames go to `sink`, flattened canvas
     /// images to the returned [`CanvasReceiver`].
     pub fn spawn(sink: FrameSink) -> (Self, WorkerClient, CanvasReceiver) {
         let (canvas_tx, canvas_rx) = canvas_feed();
         let shared = Arc::new(Shared {
-            pending: Mutex::new(Pending::default()),
-            wake: Condvar::new(),
+            jobs: Mailbox::new(),
+            dos: Mailbox::new(),
             renders: AtomicU64::new(0),
         });
         let timing = std::env::var_os(TIMING_ENV).is_some();
-        let thread = std::thread::Builder::new()
-            .name("render-worker".into())
-            .spawn({
-                let shared = shared.clone();
-                move || worker_loop(&shared, sink, canvas_tx, timing)
-            })
-            .expect("spawn render worker");
+        let flatten = {
+            let shared = shared.clone();
+            move || flatten_loop(&shared, canvas_tx, timing)
+        };
+        let dither = {
+            let shared = shared.clone();
+            move || dither_loop(&shared, sink, timing)
+        };
+        let threads = vec![
+            std::thread::Builder::new()
+                .name("render-worker".into())
+                .spawn(flatten)
+                .expect("spawn render worker"),
+            std::thread::Builder::new()
+                .name("render-dos".into())
+                .spawn(dither)
+                .expect("spawn render worker"),
+        ];
         let client = WorkerClient {
             shared: shared.clone(),
         };
-        (
-            Self {
-                shared,
-                thread: Some(thread),
-            },
-            client,
-            canvas_rx,
-        )
+        (Self { shared, threads }, client, canvas_rx)
     }
 
-    /// Stops the thread after the frame in progress and joins it. Pending
-    /// requests are dropped. Idempotent.
+    /// Stops the threads after the frame in progress and joins them.
+    /// Pending requests are dropped. Idempotent.
     pub fn shutdown(&mut self) {
-        if let Some(thread) = self.thread.take() {
-            self.shared.pending.lock().expect("render worker lock").stop = true;
-            self.shared.wake.notify_one();
-            let _ = thread.join();
+        if self.threads.is_empty() {
+            return;
         }
+        self.shared.jobs.stop();
+        self.shared.dos.stop();
+        for t in self.threads.drain(..) {
+            let _ = t.join();
+        }
+        // Give back the lease of a job that never started.
+        self.shared.jobs.post(|j| *j = None);
     }
 }
 
@@ -437,37 +589,42 @@ impl Drop for RenderWorker {
     }
 }
 
-fn worker_loop(shared: &Shared, mut sink: FrameSink, canvas: CanvasSender, timing: bool) {
+fn flatten_loop(shared: &Shared, canvas: CanvasSender, timing: bool) {
+    while let Some(Some(job)) = shared.jobs.wait(Option::is_some) {
+        let (frame, flat) = flatten_job(job);
+        canvas.send(frame);
+        if timing {
+            eprintln!(
+                "render-worker: canvas sent {:.2?} after doc change (flatten {:.2?})",
+                flat.requested.elapsed(),
+                flat.flatten
+            );
+        }
+        shared.dos.post(|p| p.flat = Some(flat));
+    }
+}
+
+fn dither_loop(shared: &Shared, mut sink: FrameSink, timing: bool) {
     let mut core = WorkerCore::new();
     let mut overlay = None;
-    loop {
-        let (job, new_overlay) = {
-            let mut p = shared.pending.lock().expect("render worker lock");
-            while !p.stop && p.job.is_none() && p.overlay.is_none() {
-                p = shared.wake.wait(p).expect("render worker lock");
-            }
-            if p.stop {
-                return;
-            }
-            (p.job.take(), p.overlay.take())
-        };
-        if new_overlay.is_some() {
-            overlay = new_overlay;
+    while let Some(p) = shared.dos.wait(|p| p.flat.is_some() || p.overlay.is_some()) {
+        if p.overlay.is_some() {
+            overlay = p.overlay;
         }
-        let rendered = job.map(|job| {
+        let rendered = p.flat.map(|flat| {
             let t = Instant::now();
-            canvas.send(core.render(&job));
+            core.dither(&flat);
             shared.renders.store(core.renders(), Ordering::Relaxed);
-            (job.requested, t.elapsed())
+            (flat.requested, t.elapsed())
         });
         let Some(ov) = overlay else { continue };
         if let Some(frame) = core.frame(&ov) {
             sink(frame);
-            if timing && let Some((requested, render)) = rendered {
+            if timing && let Some((requested, dither)) = rendered {
                 eprintln!(
-                    "render-worker: frame sent {:.2?} after doc change (render {:.2?})",
+                    "render-worker: DOS frame sent {:.2?} after doc change (dither {:.2?})",
                     requested.elapsed(),
-                    render
+                    dither
                 );
             }
         }
@@ -507,6 +664,7 @@ mod tests {
             sources: Arc::new(SourceStore::new()),
             version,
             requested: Instant::now(),
+            lease: SnapshotCounter::default().lease(),
         }
     }
 
@@ -552,7 +710,7 @@ mod tests {
     fn core_renders_palette_only_frames() {
         let mut core = WorkerCore::new();
         assert!(core.frame(&overlay()).is_none(), "no image yet");
-        core.render(&job(solid_doc(CgaColor::Red)));
+        core.render(job(solid_doc(CgaColor::Red)));
         let f = core.frame(&overlay()).expect("frame");
         assert_eq!(f.image.size, Size::new(2, 2));
         assert!(f.image.pixels.iter().all(|&c| c == CgaColor::Red));
@@ -562,7 +720,7 @@ mod tests {
     #[test]
     fn core_overlay_change_does_not_rerender() {
         let mut core = WorkerCore::new();
-        core.render(&job(solid_doc(CgaColor::Blue)));
+        core.render(job(solid_doc(CgaColor::Blue)));
         let mut ov = overlay();
         let a = core.frame(&ov).unwrap();
         ov.tool = Tool::Select;
@@ -706,7 +864,7 @@ mod tests {
                 let _ = gate_rx.recv_timeout(TIMEOUT);
             }
         });
-        let (mut worker, client, _canvas) = RenderWorker::spawn(sink);
+        let (mut worker, client, canvas) = RenderWorker::spawn(sink);
         client.render(job(solid_doc(CgaColor::Black)), overlay());
         let first = rx.recv_timeout(TIMEOUT).expect("first frame");
         assert!(first.image.pixels.iter().all(|&c| c == CgaColor::Black));
@@ -719,9 +877,12 @@ mod tests {
             CgaColor::Magenta,
             CgaColor::Yellow,
         ];
-        for c in colors {
-            client.render(job(solid_doc(c)), overlay());
+        for (v, c) in colors.into_iter().enumerate() {
+            client.render(job_v(solid_doc(c), v as u64 + 1), overlay());
         }
+        // The flatten stage does not wait for the blocked DOS sink.
+        let last = colors.len() as u64;
+        while canvas.next_blocking(TIMEOUT).expect("canvas frame").version != last {}
         gate_tx.send(()).unwrap();
         let second = rx.recv_timeout(TIMEOUT).expect("second frame");
         assert!(second.image.pixels.iter().all(|&c| c == CgaColor::Yellow));
@@ -766,7 +927,7 @@ mod tests {
         client.render(job(solid_doc(CgaColor::Cyan)), overlay());
         rx.recv_timeout(TIMEOUT).unwrap();
         worker.shutdown();
-        assert!(worker.thread.is_none());
+        assert!(worker.threads.is_empty());
         // The thread is gone, so its sink (and sender) was dropped.
         assert_eq!(
             rx.recv_timeout(TIMEOUT),
@@ -826,7 +987,7 @@ mod tests {
         let mut core = WorkerCore::new();
         let doc = solid_doc(CgaColor::Red);
         let expect = doc.flatten(&SourceStore::new());
-        let frame = core.render(&job_v(doc, 7));
+        let frame = core.render(job_v(doc, 7));
         assert_eq!(frame.version, 7);
         assert_eq!((frame.width, frame.height), (8, 8));
         assert_eq!(frame.bgra, crate::canvas_image::rgba_to_bgra(&expect));
@@ -851,13 +1012,15 @@ mod tests {
     }
 
     #[test]
-    fn canvas_burst_delivers_the_newest() {
-        // Hold the worker in the DOS sink on the first frame so a burst of
-        // renders piles up; the canvas receiver sees the last version.
+    fn canvas_does_not_wait_for_the_dos_stage() {
+        // Hold the dither stage in the DOS sink on the first frame; the
+        // canvas still gets every newer render, ending with the newest.
         let (gate_tx, gate_rx) = mpsc::channel::<()>();
+        let (tx, rx) = mpsc::channel();
         let mut sent = 0;
-        let sink: FrameSink = Box::new(move |_| {
+        let sink: FrameSink = Box::new(move |f| {
             sent += 1;
+            let _ = tx.send(f);
             if sent == 1 {
                 let _ = gate_rx.recv_timeout(TIMEOUT);
             }
@@ -865,13 +1028,112 @@ mod tests {
         let (mut worker, client, canvas) = RenderWorker::spawn(sink);
         client.render(job_v(solid_doc(CgaColor::Black), 1), overlay());
         assert_eq!(canvas.next_blocking(TIMEOUT).map(|f| f.version), Some(1));
+        rx.recv_timeout(TIMEOUT)
+            .expect("first DOS frame (now blocked)");
         for v in 2..8 {
             client.render(job_v(solid_doc(CgaColor::Blue), v), overlay());
         }
+        let mut seen = 0;
+        while seen != 7 {
+            let f = canvas
+                .next_blocking(TIMEOUT)
+                .expect("canvas while DOS blocked");
+            assert!(f.version > seen, "versions only grow");
+            seen = f.version;
+        }
         gate_tx.send(()).unwrap();
-        assert_eq!(canvas.next_blocking(TIMEOUT).map(|f| f.version), Some(7));
+        let second = rx.recv_timeout(TIMEOUT).expect("second DOS frame");
+        assert!(second.image.pixels.iter().all(|&c| c == CgaColor::Blue));
         worker.shutdown();
-        assert_eq!(client.renders(), 2);
+        assert_eq!(client.renders(), 2, "the dither coalesced the burst");
+    }
+
+    #[test]
+    fn snapshot_lease_is_released_after_flatten_before_the_canvas() {
+        let counter = SnapshotCounter::default();
+        assert!(!counter.busy());
+        let mut j = job(solid_doc(CgaColor::Red));
+        j.lease = counter.lease();
+        assert!(counter.busy());
+        let copy = j.clone();
+        drop(j);
+        assert!(counter.busy(), "a clone holds its own lease");
+        let (frame, flat) = flatten_job(copy);
+        assert!(!counter.busy(), "released by the flatten");
+        assert_eq!(frame.version, flat.version);
+
+        // Through the worker: by the time the canvas frame arrives the
+        // snapshot is gone.
+        let (sink, _rx) = channel_sink();
+        let (mut worker, client, canvas) = RenderWorker::spawn(sink);
+        let mut j = job_v(solid_doc(CgaColor::Red), 3);
+        j.lease = counter.lease();
+        client.render(j, overlay());
+        assert_eq!(canvas.next_blocking(TIMEOUT).map(|f| f.version), Some(3));
+        assert!(!counter.busy());
+        // A job still pending at shutdown gives its lease back too.
+        worker.shutdown();
+        let mut j = job(solid_doc(CgaColor::Red));
+        j.lease = counter.lease();
+        client.render(j, overlay());
+        assert!(counter.busy());
+        drop(worker);
+    }
+
+    #[test]
+    fn strokes_queue_while_a_snapshot_is_out_and_never_copy_the_layer() {
+        use crate::paint_ops::PaintButton;
+        use rp_doc::LayerKind;
+        let size = Size::new(64, 64);
+        let fresh = || {
+            let mut st = EditorState::new();
+            let mut doc = Document::new(size);
+            doc.push_layer(Layer::paint("Paint", size));
+            st.set_document(doc);
+            st.tool = Tool::Brush;
+            st.set_brush_size(5);
+            st
+        };
+        let ptr = |st: &EditorState| match &st.selected().unwrap().kind {
+            LayerKind::Paint(p) => p.pixels.as_raw().as_ptr(),
+            _ => panic!("paint layer"),
+        };
+        let path = [(10.0, 10.0), (20.0, 12.0), (30.0, 30.0), (50.0, 40.0)];
+
+        let mut st = fresh();
+        st.begin_stroke(Vec2::new(5.0, 5.0), PaintButton::Primary);
+        let after_first = ptr(&st);
+        let mut job = Some(RenderJob::from_state(&st));
+        let v = st.doc_version;
+        for (x, y) in path {
+            assert_eq!(st.continue_stroke(Vec2::new(x, y)), 0, "queued");
+        }
+        assert_eq!(st.doc_version, v, "nothing laid, nothing to re-render");
+        assert_eq!(st.flush_stroke(), 0, "still held");
+        // The worker flattens and releases the snapshot.
+        let (_frame, _flat) = flatten_job(job.take().unwrap());
+        assert!(st.flush_stroke() > 0);
+        assert_ne!(st.doc_version, v);
+        assert_eq!(ptr(&st), after_first, "the layer was never copied");
+        // Queued dabs left at the release are laid too.
+        let held = RenderJob::from_state(&st);
+        assert_eq!(st.continue_stroke(Vec2::new(60.0, 60.0)), 0);
+        st.end_stroke();
+        drop(held);
+        // Reference: no snapshots, every dab laid at once.
+        let mut reference = fresh();
+        reference.begin_stroke(Vec2::new(5.0, 5.0), PaintButton::Primary);
+        for (x, y) in path.into_iter().chain([(60.0, 60.0)]) {
+            assert!(reference.continue_stroke(Vec2::new(x, y)) > 0);
+        }
+        reference.end_stroke();
+        assert_eq!(
+            st.document, reference.document,
+            "same pixels as laying at once"
+        );
+        // One undo step that restores the empty layer.
+        st.undo();
+        assert_eq!(st.document, fresh().document);
     }
 
     /// Timing of the steps on a fresh 800×1280 document with four paint
@@ -898,10 +1160,10 @@ mod tests {
         }
         eprintln!("flatten (worker): {:?}", t.elapsed() / n);
         let mut core = WorkerCore::new();
-        core.render(&job);
+        core.render(job.clone());
         let t = Instant::now();
         for _ in 0..n {
-            core.render(&job);
+            core.render(job.clone());
         }
         eprintln!("flatten + dither (worker): {:?}", t.elapsed() / n);
 

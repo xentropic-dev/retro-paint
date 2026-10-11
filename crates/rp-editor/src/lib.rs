@@ -42,6 +42,8 @@ pub mod render_worker;
 pub mod ribbon_icons;
 pub mod select_ops;
 pub mod state;
+#[cfg(test)]
+mod stroke_timing;
 pub mod swatch_ops;
 mod swatches_panel;
 pub mod transform_ops;

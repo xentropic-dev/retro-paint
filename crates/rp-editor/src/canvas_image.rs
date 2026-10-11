@@ -30,9 +30,31 @@ pub fn rgba_to_bgra(img: &RgbaImage) -> Vec<u8> {
 /// [`rgba_to_bgra`] in place, reusing the buffer.
 pub fn rgba_into_bgra(mut px: Vec<u8>) -> Vec<u8> {
     for p in px.as_chunks_mut::<4>().0 {
-        p.swap(0, 2);
+        *p = swap_rb(*p);
     }
     px
+}
+
+/// [`rgba_to_bgra`] of a packed RGBA8 buffer, into a new buffer.
+pub fn rgba_bytes_to_bgra(src: &[u8]) -> Vec<u8> {
+    let mut out = vec![0u8; src.len()];
+    for (d, s) in out
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(src.as_chunks::<4>().0)
+    {
+        *d = swap_rb(*s);
+    }
+    out
+}
+
+/// One pixel RGBA ↔ BGRA, as word operations (vectorizes; a byte swap per
+/// pixel does not).
+#[inline(always)]
+fn swap_rb(p: [u8; 4]) -> [u8; 4] {
+    let v = u32::from_le_bytes(p);
+    ((v & 0xff00_ff00) | ((v >> 16) & 0xff) | ((v & 0xff) << 16)).to_le_bytes()
 }
 
 /// A `width × height` opaque BGRA checkerboard of [`CHECKER`]-pixel squares,
@@ -138,6 +160,12 @@ mod tests {
         img.put(0, 0, [10, 20, 30, 40]);
         img.put(1, 0, [255, 0, 0, 255]);
         assert_eq!(rgba_to_bgra(&img), vec![30, 20, 10, 40, 0, 0, 255, 255]);
+        assert_eq!(rgba_bytes_to_bgra(img.as_raw()), rgba_to_bgra(&img));
+        let bytes: Vec<u8> = (0..=255).collect();
+        let swapped = rgba_bytes_to_bgra(&bytes);
+        for (s, d) in bytes.chunks(4).zip(swapped.chunks(4)) {
+            assert_eq!(d, [s[2], s[1], s[0], s[3]]);
+        }
     }
 
     #[test]

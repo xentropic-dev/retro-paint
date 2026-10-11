@@ -27,6 +27,17 @@
 //!   Eraser reveal; image layers and pixel-locked layers allow it.
 //! - The document version is bumped once per pointer event that laid down at
 //!   least one dab, never per dab; the render worker coalesces.
+//! - A stroke never writes to a layer (or mask) the render worker's snapshot
+//!   still shares: that write would copy the whole raster on the UI thread
+//!   (copy-on-write). While a snapshot is out ([`EditorState::snapshots`])
+//!   the spaced dabs are queued, and laid in order once it is released:
+//!   when the worker's canvas frame arrives ([`EditorState::flush_stroke`]),
+//!   at the next pointer event, or at the release (which lays them
+//!   regardless). The worker releases its snapshot right after flattening,
+//!   so dabs wait at most one flatten and the canvas shows them no later
+//!   than a copying stroke would (the copy's snapshot would wait for the
+//!   same flatten). Dab positions and results are the same as laying each
+//!   immediately.
 //! - One stroke is one undo step: the press opens a paint step on the
 //!   layer, the release commits it, and only the rectangle covering every
 //!   dab (in the layer raster) is searched for changes and stored.
@@ -294,6 +305,9 @@ pub struct Stroke {
     pub layer: LayerId,
     pub paint: StrokePaint,
     spacer: Spacer,
+    /// Spaced dab centers (canvas coordinates) not laid yet: the render
+    /// worker still held a snapshot sharing the raster.
+    queued: Vec<(f32, f32)>,
     /// Raster pixels any dab touched so far, `[x0, y0, x1, y1)` in layer
     /// raster coordinates (unclipped).
     bounds: Option<[i64; 4]>,
@@ -305,6 +319,11 @@ impl Stroke {
             Some([x0, y0, x1, y1]) => [x0.min(a), y0.min(b), x1.max(c), y1.max(d)],
             None => [a, b, c, d],
         });
+    }
+
+    /// Dabs waiting for the render worker to release its snapshot.
+    pub fn queued(&self) -> usize {
+        self.queued.len()
     }
 
     /// The stroke's dab bounds clipped to a `size` raster, for
@@ -351,42 +370,9 @@ impl FrameView<'_> {
     }
 }
 
-/// Lowers alpha under one dab of `brush`'s mask (`opacity` 0–1), with the
-/// same placement as [`rp_brush::stamp`]: the mask's middle pixel lands on
-/// the pixel containing `(cx, cy)`. Pixels outside the buffer are clipped.
-pub fn erase_dab(
-    dst: &mut [u8],
-    width: u32,
-    height: u32,
-    brush: &Brush,
-    cx: f32,
-    cy: f32,
-    opacity: f32,
-) {
-    assert_eq!(dst.len(), width as usize * height as usize * 4);
-    let m = &brush.mask;
-    let x0 = cx.floor() as i64 - (m.width / 2) as i64;
-    let y0 = cy.floor() as i64 - (m.height / 2) as i64;
-    let opacity = opacity.clamp(0.0, 1.0);
-    for my in 0..m.height {
-        let y = y0 + my as i64;
-        if y < 0 || y >= height as i64 {
-            continue;
-        }
-        for mx in 0..m.width {
-            let x = x0 + mx as i64;
-            if x < 0 || x >= width as i64 {
-                continue;
-            }
-            let a = m.data[(my * m.width + mx) as usize] as f32 / 255.0 * opacity;
-            if a <= 0.0 {
-                continue;
-            }
-            let ai = (y as usize * width as usize + x as usize) * 4 + 3;
-            dst[ai] = (dst[ai] as f32 * (1.0 - a)).round() as u8;
-        }
-    }
-}
+/// Eraser dabs: the fast, byte-identical [`rp_brush::erase_dab`] (lowers
+/// alpha under one dab by coverage × opacity).
+pub use rp_brush::erase_dab;
 
 fn rgba(c: Rgb) -> [u8; 4] {
     [c.r, c.g, c.b, 255]
@@ -501,22 +487,45 @@ impl EditorState {
             layer: id,
             paint,
             spacer: Spacer::new(self.brush.brush().step()),
+            queued: Vec::new(),
             bounds: None,
         });
         self.continue_stroke(c);
     }
 
     /// Extends the stroke to canvas point `c`: stamps every spaced dab
-    /// between the last point and `c`. Bumps the document version once if
-    /// any dab was laid. Returns the number of dabs.
+    /// between the last point and `c` (and any queued before). Bumps the
+    /// document version once if any dab was laid. Returns the number of
+    /// dabs laid now; while the render worker holds a snapshot they are
+    /// queued instead and this returns 0 (see the module docs).
     pub fn continue_stroke(&mut self, c: Vec2) -> usize {
         let Some(stroke) = &mut self.stroke else {
             return 0;
         };
         let dabs = stroke.spacer.push((c.x, c.y));
-        if dabs.is_empty() {
+        stroke.queued.extend(dabs);
+        self.flush_stroke()
+    }
+
+    /// Lays the stroke's queued dabs if the render worker no longer holds a
+    /// snapshot. The view calls it when a canvas frame arrives. Returns the
+    /// number of dabs laid (the document version was bumped if nonzero).
+    pub fn flush_stroke(&mut self) -> usize {
+        if self.snapshots.busy() {
             return 0;
         }
+        self.lay_queued_dabs()
+    }
+
+    /// Lays the stroke's queued dabs now, shared raster or not.
+    fn lay_queued_dabs(&mut self) -> usize {
+        let Some(stroke) = &mut self.stroke else {
+            return 0;
+        };
+        if stroke.queued.is_empty() {
+            return 0;
+        }
+        let dabs = std::mem::take(&mut stroke.queued);
         let (id, paint) = (stroke.layer, stroke.paint);
         let brush = self.brush.brush();
         let (mw, mh) = (brush.mask.width, brush.mask.height);
@@ -561,8 +570,10 @@ impl EditorState {
         dabs.len()
     }
 
-    /// Ends the stroke, if any, recording it as one undo step.
+    /// Ends the stroke, if any, recording it as one undo step. Queued dabs
+    /// are laid first.
     pub fn end_stroke(&mut self) {
+        self.lay_queued_dabs();
         let Some(stroke) = self.stroke.take() else {
             return;
         };
@@ -997,6 +1008,14 @@ mod tests {
     /// (`rp_brush::stamp`, ~15 ns/px; splatter samples are mostly empty and
     /// cheaper). The bounds here are loose; they catch a regression to
     /// resizing from the original or stamping per pixel moved.
+    ///
+    /// stroke-perf: ~7 ms/dab here is the stamp itself, not a layer copy
+    /// (there is no render worker in this test, and the one copy, the
+    /// stroke's first write against the undo `before`, lands in the first
+    /// event): this brush's coverage is translucent everywhere, so after
+    /// the first dab (~1.5 ms over empty pixels) each overlapping dab takes
+    /// `stamp`'s blend-over-paint path (~7–8 ms per 1024² dab). See
+    /// `stroke_timing` for strokes against a live worker.
     #[test]
     fn big_sampled_brush_resize_and_stroke_cost() {
         use std::time::Instant;

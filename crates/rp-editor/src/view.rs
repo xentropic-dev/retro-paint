@@ -239,6 +239,13 @@ impl EditorView {
                     if v.canvas_cache.accept(frame) {
                         cx.notify();
                     }
+                    // The worker released its snapshot before publishing:
+                    // lay the dabs a stroke queued meanwhile.
+                    v.state.update(cx, |s, cx| {
+                        if s.flush_stroke() > 0 {
+                            cx.notify();
+                        }
+                    });
                     if timing {
                         eprintln!(
                             "editor: canvas image shown {:.2?} after doc change \
