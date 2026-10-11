@@ -92,6 +92,16 @@ Top of the right-hand panel column. The list shows the top of the stack at the t
 - The picker and the swatches are the ways to set a color in v1; there is no RGB/HSV color editor yet.
 - Colors and swatches are stored in the document (see [File Format](file-format.md)) but are not pixel edits: changing them never re-renders or re-dithers (`doc_version` does not move). A foreground change reaches the DOS view as an overlay update of its active color. For undo: swatch add/remove are document edits and should be undoable steps; fg/bg changes (picker, swatch click, swap, reset) are not undo steps, like GIMP.
 
+### Undo and redo
+
+- **Edit > Undo** (Ctrl+Z) and **Edit > Redo** (Ctrl+Shift+Z or Ctrl+Y) cover every document edit. The Edit menu sits next to File and names the step ("Undo Brush Stroke"); an entry is greyed out when there is nothing to undo or redo.
+- One step each: a brush or eraser stroke (press to release), a move / scale / rotate drag, each Layers-panel command (an inline rename counts once, when committed), each filter change, each inserted image, Project Settings Apply, swatch add and remove.
+- Runs of the same control merge into one step while nothing else is recorded in between: one filter slider (bar clicks and −/+ steps; Reset is its own step), one layer's opacity, and arrow-key nudges of one layer.
+- Not steps: fg/bg colors, layer selection, tool, brush, zoom and scroll, panel collapse. Undo and redo keep the current fg/bg.
+- Undo during a stroke or drag finishes it and undoes it; it cancels an inline rename. Undo and redo do nothing while a dialog is open. If the selected layer is gone afterwards, the top layer is selected; a changed canvas size refits the view.
+- The history is bounded by memory, about 512 MiB; the oldest steps are dropped first and the newest one is always kept. Strokes store only the changed rectangle of the layer; other steps keep a copy of the document (image layers only reference their source).
+- New and Open clear the history. Undoing back to the last-saved state makes the document clean again (the • goes away).
+
 ## Canvas, output, and screen resolutions
 
 Three separate sizes are involved:

@@ -26,6 +26,7 @@ use crate::state::{EditorState, FileCommand, ViewCommand, shortcut_label, tool_l
 use crate::swatch_ops::color_key;
 use crate::swatches_panel::SwatchesPanel;
 use crate::transform_ops::arrow_nudge;
+use crate::undo_ops::EditCommand;
 use crate::viewport::Vec2;
 
 actions!(
@@ -42,7 +43,9 @@ actions!(
         ZoomIn,
         ZoomOut,
         ActualSize,
-        FitCanvas
+        FitCanvas,
+        Undo,
+        Redo
     ]
 );
 
@@ -61,6 +64,12 @@ pub fn bind_keys(cx: &mut App) {
             FileCommand::Quit => KeyBinding::new(k, Quit, None),
         }
     }));
+    for cmd in EditCommand::ALL {
+        cx.bind_keys(cmd.keystrokes().iter().map(|&k| match cmd {
+            EditCommand::Undo => KeyBinding::new(k, Undo, None),
+            EditCommand::Redo => KeyBinding::new(k, Redo, None),
+        }));
+    }
     for cmd in ViewCommand::ALL {
         cx.bind_keys(cmd.keystrokes().iter().map(|&k| match cmd {
             ViewCommand::ZoomIn => KeyBinding::new(k, ZoomIn, None),
@@ -87,6 +96,8 @@ pub(crate) const TEXT_DIM: u32 = 0x8a8a8a;
 const DROP_HIGHLIGHT: u32 = 0x2a3f5c;
 
 const MENU_BAR_H: f32 = 26.;
+/// Width of a top-level menu-bar button (File, Edit).
+const MENU_BUTTON_W: f32 = 48.;
 const RIBBON_H: f32 = 44.;
 /// Width of the right-hand panel column. Its sections size to their content
 /// and the column scrolls as a whole when the window is too short.
@@ -275,9 +286,16 @@ impl EditorView {
     fn on_quit(&mut self, _: &Quit, w: &mut Window, cx: &mut Context<Self>) {
         self.run(FileCommand::Quit, w, cx);
     }
+    fn on_undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
+        self.edit(cx, |s| s.edit_command(EditCommand::Undo));
+    }
+    fn on_redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
+        self.edit(cx, |s| s.edit_command(EditCommand::Redo));
+    }
 
     fn menu_bar(&self, cx: &mut Context<Self>) -> Div {
-        let open = self.state.read(cx).file_menu_open;
+        let state = self.state.read(cx);
+        let (file_open, edit_open) = (state.file_menu_open, state.edit_menu_open);
         div()
             .flex()
             .flex_row()
@@ -289,38 +307,54 @@ impl EditorView {
             .border_color(rgb(BORDER))
             .text_sm()
             .child(
-                div()
-                    .id("menu-file")
-                    .px_3()
-                    .h_full()
-                    .flex()
-                    .items_center()
-                    .cursor_pointer()
-                    .when(open, |d| d.bg(rgb(BG_HOVER)))
-                    .hover(|s| s.bg(rgb(BG_HOVER)))
-                    .child("File")
-                    .on_click(cx.listener(|this, _, _, cx| {
+                menu_button("menu-file", "File", file_open).on_click(cx.listener(
+                    |this, _, _, cx| {
                         this.edit(cx, |s| s.toggle_file_menu());
-                    })),
+                    },
+                )),
+            )
+            .child(
+                menu_button("menu-edit", "Edit", edit_open).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.edit(cx, |s| s.toggle_edit_menu());
+                    },
+                )),
             )
     }
 
+    fn edit_menu(&self, cx: &mut Context<Self>) -> Div {
+        let history = &self.state.read(cx).history;
+        let mut menu = dropdown(4. + MENU_BUTTON_W);
+        for cmd in EditCommand::ALL {
+            let enabled = cmd.enabled(history);
+            let item = div()
+                .id(SharedString::from(format!("edit-{cmd:?}")))
+                .flex()
+                .flex_row()
+                .justify_between()
+                .px_3()
+                .py_1()
+                .child(cmd.menu_label(history))
+                .child(
+                    div()
+                        .text_color(rgb(TEXT_DIM))
+                        .child(shortcut_label(cmd.keystrokes()[0])),
+                );
+            menu = menu.child(if enabled {
+                item.cursor_pointer()
+                    .hover(|s| s.bg(rgb(ACCENT)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.edit(cx, |s| s.edit_command(cmd));
+                    }))
+            } else {
+                item.text_color(rgb(TEXT_DIM))
+            });
+        }
+        menu
+    }
+
     fn file_menu(&self, cx: &mut Context<Self>) -> Div {
-        let mut menu = div()
-            .absolute()
-            .top(px(MENU_BAR_H))
-            .left(px(4.))
-            .w(px(240.))
-            .py_1()
-            .flex()
-            .flex_col()
-            .bg(rgb(BG_MENU))
-            .border_1()
-            .border_color(rgb(BORDER))
-            .rounded_sm()
-            .shadow_lg()
-            .text_sm()
-            .occlude();
+        let mut menu = dropdown(4.);
         for cmd in FileCommand::ALL {
             menu = menu.child(
                 div()
@@ -743,6 +777,40 @@ impl EditorView {
     }
 }
 
+/// A top-level menu-bar button.
+fn menu_button(id: &'static str, label: &'static str, open: bool) -> Stateful<Div> {
+    div()
+        .id(id)
+        .w(px(MENU_BUTTON_W))
+        .h_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .when(open, |d| d.bg(rgb(BG_HOVER)))
+        .hover(|s| s.bg(rgb(BG_HOVER)))
+        .child(label)
+}
+
+/// An empty menu dropdown under the menu bar, `left` px from the window edge.
+fn dropdown(left: f32) -> Div {
+    div()
+        .absolute()
+        .top(px(MENU_BAR_H))
+        .left(px(left))
+        .w(px(240.))
+        .py_1()
+        .flex()
+        .flex_col()
+        .bg(rgb(BG_MENU))
+        .border_1()
+        .border_color(rgb(BORDER))
+        .rounded_sm()
+        .shadow_lg()
+        .text_sm()
+        .occlude()
+}
+
 fn tool_button(tool: Tool, selected: bool) -> Stateful<Div> {
     ribbon_button(
         SharedString::from(format!("tool-{tool:?}")),
@@ -851,7 +919,8 @@ fn section_header(section: PanelSection, sections: &PanelSections) -> Stateful<D
 
 impl Render for EditorView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let menu_open = self.state.read(cx).file_menu_open;
+        let menu_open = self.state.read(cx).menu_open();
+        let file_menu_open = self.state.read(cx).file_menu_open;
         let dialog_open = self.state.read(cx).project_dialog.is_some();
         let file_modal = self.state.read(cx).file_modal_open();
         let title = self.state.read(cx).window_title();
@@ -874,6 +943,8 @@ impl Render for EditorView {
             .on_action(cx.listener(Self::on_zoom_out))
             .on_action(cx.listener(Self::on_actual_size))
             .on_action(cx.listener(Self::on_fit))
+            .on_action(cx.listener(Self::on_undo))
+            .on_action(cx.listener(Self::on_redo))
             .on_key_down(cx.listener(Self::on_key_down))
             .on_key_up(cx.listener(Self::on_key_up))
             .on_modifiers_changed(cx.listener(|this, ev: &ModifiersChangedEvent, _, cx| {
@@ -917,7 +988,11 @@ impl Render for EditorView {
                             }),
                         ),
                 )
-                .child(self.file_menu(cx))
+                .child(if file_menu_open {
+                    self.file_menu(cx)
+                } else {
+                    self.edit_menu(cx)
+                })
             })
             .when(dialog_open, |root| {
                 // Modal: the backdrop swallows clicks meant for the editor.

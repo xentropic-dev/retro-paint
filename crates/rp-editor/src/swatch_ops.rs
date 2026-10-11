@@ -5,10 +5,13 @@
 //! [`EditorState::doc_version`] and never re-dither. A foreground change
 //! reaches the DOS view as an overlay update (see
 //! [`crate::render_worker::Overlay`]).
+//!
+//! Swatch add/remove are undo steps; fg/bg changes are not.
 
 use rp_palette_dither::Rgb;
 
 use crate::state::EditorState;
+use crate::undo_ops::EditLabel;
 
 /// Most swatches a document keeps. Adding beyond this is refused.
 pub const MAX_SWATCHES: usize = 64;
@@ -102,7 +105,9 @@ impl EditorState {
     /// Swatches panel "+": saves the foreground. See [`add_swatch`].
     pub fn add_fg_swatch(&mut self) -> AddSwatch {
         let c = self.document.fg;
-        let r = add_swatch(&mut self.document.swatches, c);
+        let r = self.record(EditLabel::AddSwatch, |s| {
+            add_swatch(&mut s.document.swatches, c)
+        });
         self.status = match r {
             AddSwatch::Added => format!("Saved swatch {}", hex(c)),
             AddSwatch::Moved => format!("Swatch {} moved to the end", hex(c)),
@@ -115,7 +120,10 @@ impl EditorState {
 
     /// Removes swatch `index` (middle-click on it).
     pub fn remove_swatch_at(&mut self, index: usize) -> bool {
-        match remove_swatch(&mut self.document.swatches, index) {
+        let removed = self.record(EditLabel::RemoveSwatch, |s| {
+            remove_swatch(&mut s.document.swatches, index)
+        });
+        match removed {
             Some(c) => {
                 self.status = format!("Removed swatch {}", hex(c));
                 true

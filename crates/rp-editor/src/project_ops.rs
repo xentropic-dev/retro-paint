@@ -446,7 +446,10 @@ impl EditorState {
     /// Applies project settings as one document edit. A canvas change ends
     /// any stroke or drag and refits the view. Returns the before-state, or
     /// `None` if nothing changed.
+    /// The edit is recorded as one undo step.
     pub fn apply_project(&mut self, s: &ProjectSettings) -> Option<ProjectEdit> {
+        self.finish_gestures();
+        let content_before = self.content;
         let before = self.document.clone();
         if !apply_settings(&mut self.document, s) {
             return None;
@@ -469,6 +472,12 @@ impl EditorState {
             layout_label(d.layout)
         );
         self.mark_document_changed();
+        self.history.push_snapshot(
+            before.clone(),
+            crate::undo_ops::EditLabel::ProjectSettings,
+            content_before,
+            self.content,
+        );
         Some(ProjectEdit { before })
     }
 }

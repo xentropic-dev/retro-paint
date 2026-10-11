@@ -13,10 +13,14 @@
 //! - After a delete, the layer that was below is selected, or the new bottom
 //!   layer if the deleted one was at the bottom.
 //! - A new mask is all white (shows the whole layer), canvas-sized.
+//! - Every command that changes the document is one undo step; an inline
+//!   rename is one step when it is committed, and consecutive opacity
+//!   changes of one layer merge into one step. Selection is not a step.
 
 use rp_doc::{BlendMode, GrayImage, Layer, LayerId};
 
 use crate::state::EditorState;
+use crate::undo_ops::{Coalesce, EditLabel};
 
 /// Opacity change per click of the panel's −/+ steppers, in percent.
 pub const OPACITY_STEP: i32 = 5;
@@ -61,9 +65,18 @@ impl EditorState {
         }
     }
 
-    /// Runs `f` on layer `id`; bumps the document version if it returns
-    /// `true` (the layer changed).
-    fn modify_layer(&mut self, id: LayerId, f: impl FnOnce(&mut Layer) -> bool) -> bool {
+    /// Runs `f` on layer `id` as one undo step labelled `label`; bumps the
+    /// document version if it returns `true` (the layer changed).
+    fn modify_layer(
+        &mut self,
+        id: LayerId,
+        label: EditLabel,
+        f: impl FnOnce(&mut Layer) -> bool,
+    ) -> bool {
+        self.record(label, |s| s.modify_layer_now(id, f))
+    }
+
+    fn modify_layer_now(&mut self, id: LayerId, f: impl FnOnce(&mut Layer) -> bool) -> bool {
         let changed = self.document.layer_mut(id).is_some_and(f);
         if changed {
             self.mark_document_changed();
@@ -74,6 +87,10 @@ impl EditorState {
     /// Adds a transparent canvas-sized paint layer above the selection and
     /// selects it.
     pub fn add_paint_layer(&mut self) -> LayerId {
+        self.record(EditLabel::AddLayer, Self::add_paint_layer_now)
+    }
+
+    fn add_paint_layer_now(&mut self) -> LayerId {
         let name = next_layer_name(self.document.layers());
         let layer = Layer::paint(name.clone(), self.document.canvas_size);
         let index = self
@@ -89,6 +106,10 @@ impl EditorState {
     /// Deletes the selected layer unless it is the only one. Returns whether
     /// a layer was deleted.
     pub fn delete_selected_layer(&mut self) -> bool {
+        self.record(EditLabel::DeleteLayer, Self::delete_selected_layer_now)
+    }
+
+    fn delete_selected_layer_now(&mut self) -> bool {
         let Some(index) = self.selected_index() else {
             return false;
         };
@@ -114,6 +135,10 @@ impl EditorState {
     /// Moves the selected layer one step up (toward the top of the stack) or
     /// down. Returns whether it moved.
     pub fn move_selected_layer(&mut self, up: bool) -> bool {
+        self.record(EditLabel::ReorderLayer, |s| s.move_selected_layer_now(up))
+    }
+
+    fn move_selected_layer_now(&mut self, up: bool) -> bool {
         let (Some(id), Some(index)) = (self.selected_layer, self.selected_index()) else {
             return false;
         };
@@ -139,7 +164,7 @@ impl EditorState {
         if name.is_empty() {
             return false;
         }
-        self.modify_layer(id, |l| {
+        self.modify_layer(id, EditLabel::RenameLayer, |l| {
             if l.name == name {
                 return false;
             }
@@ -149,7 +174,7 @@ impl EditorState {
     }
 
     pub fn toggle_visibility(&mut self, id: LayerId) -> bool {
-        self.modify_layer(id, |l| {
+        self.modify_layer(id, EditLabel::Visibility, |l| {
             l.visible = !l.visible;
             true
         })
@@ -158,12 +183,15 @@ impl EditorState {
     /// Sets opacity in percent, clamped to `0..=100`.
     pub fn set_layer_opacity(&mut self, id: LayerId, percent: i32) -> bool {
         let percent = percent.clamp(0, 100) as u8;
-        self.modify_layer(id, |l| {
+        let f = |l: &mut Layer| {
             if l.opacity == percent {
                 return false;
             }
             l.set_opacity(percent);
             true
+        };
+        self.record_coalesced(EditLabel::Opacity, Coalesce::Opacity(id), |s| {
+            s.modify_layer_now(id, f)
         })
     }
 
@@ -176,7 +204,7 @@ impl EditorState {
     }
 
     pub fn set_layer_blend(&mut self, id: LayerId, blend: BlendMode) -> bool {
-        self.modify_layer(id, |l| {
+        self.modify_layer(id, EditLabel::BlendMode, |l| {
             if l.blend == blend {
                 return false;
             }
@@ -186,14 +214,14 @@ impl EditorState {
     }
 
     pub fn toggle_lock_pixels(&mut self, id: LayerId) -> bool {
-        self.modify_layer(id, |l| {
+        self.modify_layer(id, EditLabel::LockPixels, |l| {
             l.lock.pixels = !l.lock.pixels;
             true
         })
     }
 
     pub fn toggle_lock_position(&mut self, id: LayerId) -> bool {
-        self.modify_layer(id, |l| {
+        self.modify_layer(id, EditLabel::LockPosition, |l| {
             l.lock.position = !l.lock.position;
             true
         })
@@ -202,7 +230,7 @@ impl EditorState {
     /// Gives layer `id` an all-white canvas-sized mask if it has none.
     pub fn add_mask(&mut self, id: LayerId) -> bool {
         let size = self.document.canvas_size;
-        self.modify_layer(id, |l| {
+        self.modify_layer(id, EditLabel::AddMask, |l| {
             if l.mask.is_some() {
                 return false;
             }
@@ -212,7 +240,7 @@ impl EditorState {
     }
 
     pub fn remove_mask(&mut self, id: LayerId) -> bool {
-        self.modify_layer(id, |l| l.mask.take().is_some())
+        self.modify_layer(id, EditLabel::RemoveMask, |l| l.mask.take().is_some())
     }
 
     /// Starts an inline rename of layer `id` and selects it.

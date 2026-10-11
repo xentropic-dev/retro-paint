@@ -18,12 +18,17 @@
 //! - Locked and image layers refuse the stroke and say why in the status bar.
 //! - The document version is bumped once per pointer event that laid down at
 //!   least one dab, never per dab; the render worker coalesces.
+//! - One stroke is one undo step: the press opens a paint step on the
+//!   layer, the release commits it, and only the rectangle covering every
+//!   dab (in the layer raster) is searched for changes and stored.
 //! - The Picker reads the render worker's flattened frame (what the canvas
 //!   shows), never flattens on the UI thread. Fully transparent pixels are
 //!   not picked.
 
 use rp_brush::{Brush, Spacer, stamp};
-use rp_doc::{EditError, LayerId, Size, Tool};
+use rp_doc::{EditError, LayerId, LayerKind, Rect, Size, Tool};
+
+use crate::undo_ops::EditLabel;
 use rp_palette_dither::Rgb;
 
 use crate::state::EditorState;
@@ -189,6 +194,29 @@ pub struct Stroke {
     /// `None` erases.
     pub color: Option<[u8; 4]>,
     spacer: Spacer,
+    /// Raster pixels any dab touched so far, `[x0, y0, x1, y1)` in layer
+    /// raster coordinates (unclipped).
+    bounds: Option<[i64; 4]>,
+}
+
+impl Stroke {
+    /// The stroke's dab bounds clipped to a `size` raster, for
+    /// [`rp_doc::History::commit_within`].
+    pub fn dirty_rect(&self, size: Size) -> Option<Rect> {
+        let [x0, y0, x1, y1] = self.bounds?;
+        let clamp = |v: i64, max: u32| v.clamp(0, max as i64) as u32;
+        let (x0, x1) = (clamp(x0, size.width), clamp(x1, size.width));
+        let (y0, y1) = (clamp(y0, size.height), clamp(y1, size.height));
+        Some(Rect::new(x0, y0, x1 - x0, y1 - y0))
+    }
+}
+
+/// Raster pixels one dab of a `mw × mh` mask centered at `(cx, cy)` covers,
+/// `[x0, y0, x1, y1)`; the same placement as [`rp_brush::stamp`].
+fn dab_bounds(mw: u32, mh: u32, cx: f32, cy: f32) -> [i64; 4] {
+    let x0 = cx.floor() as i64 - (mw / 2) as i64;
+    let y0 = cy.floor() as i64 - (mh / 2) as i64;
+    [x0, y0, x0 + mw as i64, y0 + mh as i64]
 }
 
 /// The flattened document as the render worker delivered it: straight BGRA,
@@ -314,10 +342,17 @@ impl EditorState {
             };
             return false;
         }
+        let label = match color {
+            Some(_) => EditLabel::BrushStroke,
+            None => EditLabel::EraserStroke,
+        };
+        self.history
+            .begin_paint(&self.document, id, label, self.content);
         self.stroke = Some(Stroke {
             layer: id,
             color,
             spacer: Spacer::new(self.brush.brush().step()),
+            bounds: None,
         });
         self.continue_stroke(c);
         true
@@ -336,6 +371,7 @@ impl EditorState {
         }
         let (id, color) = (stroke.layer, stroke.color);
         let brush = self.brush.brush();
+        let (mw, mh) = (brush.mask.width, brush.mask.height);
         let Some(layer) = self.document.layer_mut(id) else {
             self.stroke = None;
             return 0;
@@ -352,6 +388,11 @@ impl EditorState {
         let buf = pixels.as_raw_mut();
         for &(x, y) in &dabs {
             let (lx, ly) = (x - ox, y - oy);
+            let [a, b, c, d] = dab_bounds(mw, mh, lx, ly);
+            stroke.bounds = Some(match stroke.bounds {
+                Some([x0, y0, x1, y1]) => [x0.min(a), y0.min(b), x1.max(c), y1.max(d)],
+                None => [a, b, c, d],
+            });
             match color {
                 Some(rgba) => stamp(buf, w, h, brush, lx, ly, rgba, 1.0),
                 None => erase_dab(buf, w, h, brush, lx, ly, 1.0),
@@ -361,9 +402,17 @@ impl EditorState {
         dabs.len()
     }
 
-    /// Ends the stroke, if any.
+    /// Ends the stroke, if any, recording it as one undo step.
     pub fn end_stroke(&mut self) {
-        self.stroke = None;
+        let Some(stroke) = self.stroke.take() else {
+            return;
+        };
+        let hint = match self.document.layer(stroke.layer).map(|l| &l.kind) {
+            Some(LayerKind::Paint(p)) => stroke.dirty_rect(p.pixels.size()),
+            _ => None,
+        };
+        // No dab landed: an empty hint records nothing.
+        self.commit_step(Some(hint.unwrap_or_default()));
     }
 
     /// Picker: sets the foreground (primary) or background (secondary) to

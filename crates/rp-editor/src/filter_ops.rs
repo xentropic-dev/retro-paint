@@ -16,6 +16,9 @@
 //!   starts from the colors of the palette that was active.
 //! - A custom subset keeps doc (swatch) order and always has at least one
 //!   color: the last one cannot be toggled off.
+//! - Every change is one undo step. Consecutive changes of one slider
+//!   (bar clicks, −/+ steps) merge into one step; a reset is its own step.
+//!   The palette-mode memory is editor state, not undone.
 //! - Settings for controls that the current method ignores (Bayer spread
 //!   for diffusion, strength/serpentine for Bayer) are kept, just hidden.
 
@@ -25,6 +28,7 @@ use rp_palette_dither::{
 };
 
 use crate::state::EditorState;
+use crate::undo_ops::{Coalesce, EditLabel};
 
 /// Step of the panel's −/+ steppers, in percent.
 pub const FILTER_STEP: i32 = 5;
@@ -264,6 +268,18 @@ impl EditorState {
     /// Applies `f` to the dither settings; bumps the document version and
     /// returns `true` only if they changed.
     fn modify_dither(&mut self, f: impl FnOnce(&mut DitherSettings)) -> bool {
+        self.record(EditLabel::Filter, |s| s.modify_dither_now(f))
+    }
+
+    /// Like `modify_dither`, merging into the previous step if it was the
+    /// same slider.
+    fn modify_slider(&mut self, slider: FilterSlider, f: impl FnOnce(&mut DitherSettings)) -> bool {
+        self.record_coalesced(EditLabel::Filter, Coalesce::Filter(slider), |s| {
+            s.modify_dither_now(f)
+        })
+    }
+
+    fn modify_dither_now(&mut self, f: impl FnOnce(&mut DitherSettings)) -> bool {
         let before = self.document.dither;
         f(&mut self.document.dither);
         let changed = self.document.dither != before;
@@ -386,7 +402,7 @@ impl EditorState {
     /// Sets a pre-adjust control in percent, clamped to `-100..=100`.
     pub fn set_adjust_percent(&mut self, control: AdjustControl, percent: i32) -> bool {
         let v = percent.clamp(-100, 100) as f32 / 100.0;
-        self.modify_dither(|s| *control.slot(s) = v)
+        self.modify_slider(FilterSlider::Adjust(control), |s| *control.slot(s) = v)
     }
 
     pub fn step_adjust(&mut self, control: AdjustControl, delta: i32) -> bool {
@@ -404,7 +420,7 @@ impl EditorState {
 
     pub fn set_bayer_spread_percent(&mut self, percent: i32) -> bool {
         let v = percent.clamp(0, 100) as f32 / 100.0;
-        self.modify_dither(|s| s.bayer_spread = v)
+        self.modify_slider(FilterSlider::BayerSpread, |s| s.bayer_spread = v)
     }
 
     pub fn step_bayer_spread(&mut self, delta: i32) -> bool {
@@ -423,7 +439,7 @@ impl EditorState {
 
     pub fn set_strength_percent(&mut self, percent: i32) -> bool {
         let v = percent.clamp(0, 100) as f32 / 100.0;
-        self.modify_dither(|s| s.strength = v)
+        self.modify_slider(FilterSlider::Strength, |s| s.strength = v)
     }
 
     pub fn step_strength(&mut self, delta: i32) -> bool {

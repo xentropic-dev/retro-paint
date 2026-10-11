@@ -30,14 +30,18 @@
 //!   transforming a masked layer leaves its mask where it is.
 //! - One drag is `begin_transform` → `continue_transform`* →
 //!   `end_transform`; the layer's state before the drag is kept in
-//!   [`TransformDrag`] so undo can treat one drag as one step. The document
-//!   version is bumped once per pointer event that changed the layer.
+//!   [`TransformDrag`]. One drag is one undo step (a snapshot opened on
+//!   press, committed on release). The document version is bumped once per
+//!   pointer event that changed the layer.
+//! - Consecutive arrow-key nudges of the same layer are one undo step (see
+//!   [`crate::undo_ops`]).
 
 use std::f32::consts::PI;
 
 use rp_doc::{EditError, LayerId, LayerKind, Size, Tool, Transform};
 
 use crate::state::EditorState;
+use crate::undo_ops::{Coalesce, EditLabel};
 use crate::viewport::{Vec2, Viewport};
 
 /// Screen pixels around a handle's center that still grab it.
@@ -402,8 +406,16 @@ impl EditorState {
                 StartPlacement::Image(i.transform, src)
             }
         };
+        let label = match kind {
+            DragKind::Move => EditLabel::Move,
+            DragKind::Scale(_) => EditLabel::Scale,
+            DragKind::Rotate => EditLabel::Rotate,
+        };
+        let id = layer.id();
+        self.history
+            .begin_snapshot(&self.document, label, None, self.content);
         self.transform_drag = Some(TransformDrag {
-            layer: layer.id(),
+            layer: id,
             kind,
             start: self.viewport.screen_to_canvas(screen),
             before,
@@ -420,7 +432,7 @@ impl EditorState {
         };
         let p = self.viewport.screen_to_canvas(screen);
         let Some(layer) = self.document.layer_mut(drag.layer) else {
-            self.transform_drag = None;
+            self.end_transform();
             return false;
         };
         let result = match (drag.before, drag.kind) {
@@ -476,7 +488,7 @@ impl EditorState {
             Err(e) => {
                 let name = layer.name.clone();
                 self.status = refusal("move", &name, e);
-                self.transform_drag = None;
+                self.end_transform();
                 false
             }
         }
@@ -494,9 +506,11 @@ impl EditorState {
         }
     }
 
-    /// Ends the drag, if any.
+    /// Ends the drag, if any, recording it as one undo step.
     pub fn end_transform(&mut self) {
-        self.transform_drag = None;
+        if self.transform_drag.take().is_some() {
+            self.commit_step(None);
+        }
     }
 
     /// Arrow keys: moves the selected layer by `(dx, dy)` canvas pixels.
@@ -506,6 +520,12 @@ impl EditorState {
             self.status = "Can't move: no layer selected".into();
             return false;
         };
+        self.record_coalesced(EditLabel::Nudge, Coalesce::Nudge(id), |s| {
+            s.nudge_layer(id, dx, dy)
+        })
+    }
+
+    fn nudge_layer(&mut self, id: LayerId, dx: i32, dy: i32) -> bool {
         let Some(layer) = self.document.layer_mut(id) else {
             self.status = "Can't move: no layer selected".into();
             return false;

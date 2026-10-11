@@ -17,6 +17,7 @@ use crate::paint_ops::{BrushState, Stroke};
 use crate::panel_layout::{PanelSection, PanelSections};
 use crate::project_ops::ProjectDraft;
 use crate::transform_ops::TransformDrag;
+use crate::undo_ops::UndoHistory;
 use crate::viewport::{Vec2, Viewport};
 
 /// Canvas size of a fresh document: 4× the 200×320 mobile output.
@@ -174,6 +175,8 @@ pub struct EditorState {
     pub tool: Tool,
     /// Whether the File dropdown is open.
     pub file_menu_open: bool,
+    /// Whether the Edit dropdown is open.
+    pub edit_menu_open: bool,
     /// One-line message for the status bar.
     pub status: String,
     /// Decoded image-layer sources for [`Document::flatten`]. Shared with
@@ -183,6 +186,12 @@ pub struct EditorState {
     /// asks the render worker for a new flatten + dither when this differs
     /// from what it last sent, and tags the results with it.
     pub doc_version: u64,
+    /// Names the document's content for dirty tracking: set to the new
+    /// `doc_version` by each edit, and back to a step's recorded value by
+    /// undo/redo (see [`crate::undo_ops`]).
+    pub content: u64,
+    /// Undo and redo steps.
+    pub history: UndoHistory,
     /// Zoom and scroll of the canvas area.
     pub viewport: Viewport,
     /// While set, the viewport refits the canvas whenever the canvas area is
@@ -249,7 +258,7 @@ impl EditorState {
         let s = document.canvas_size;
         let selected_layer = document.layers().last().map(Layer::id);
         let saved = SavedMark {
-            doc_version: 0,
+            content: 0,
             fg: document.fg,
             bg: document.bg,
             swatches: document.swatches.clone(),
@@ -258,9 +267,12 @@ impl EditorState {
             document,
             tool: Tool::default(),
             file_menu_open: false,
+            edit_menu_open: false,
             status: "Ready".into(),
             sources: Arc::new(SourceStore::new()),
             doc_version: 0,
+            content: 0,
+            history: UndoHistory::default(),
             viewport: Viewport::new(s.width, s.height),
             auto_fit: true,
             cursor_canvas: None,
@@ -291,9 +303,10 @@ impl EditorState {
         self.panels.toggle(section);
     }
 
-    /// Replaces the document, selects its top layer, marks it changed and
-    /// refits the view.
+    /// Replaces the document, selects its top layer, marks it changed,
+    /// clears the undo history and refits the view.
     pub fn set_document(&mut self, document: Document) {
+        self.history.clear();
         let s = document.canvas_size;
         self.selected_layer = document.layers().last().map(Layer::id);
         self.renaming = None;
@@ -311,6 +324,7 @@ impl EditorState {
     /// Call after any edit that can change the flattened image.
     pub fn mark_document_changed(&mut self) {
         self.doc_version = self.doc_version.wrapping_add(1);
+        self.content = self.doc_version;
     }
 
     /// Records the canvas area's size; refits while [`EditorState::auto_fit`].
@@ -396,7 +410,7 @@ impl EditorState {
 
     /// Runs a File-menu command. Always closes the File dropdown.
     pub fn dispatch(&mut self, cmd: FileCommand) -> Outcome {
-        self.file_menu_open = false;
+        self.close_menus();
         if self.file_modal_open() {
             return Outcome::Done;
         }
@@ -429,10 +443,22 @@ impl EditorState {
 
     pub fn toggle_file_menu(&mut self) {
         self.file_menu_open = !self.file_menu_open;
+        self.edit_menu_open = false;
+    }
+
+    pub fn toggle_edit_menu(&mut self) {
+        self.edit_menu_open = !self.edit_menu_open;
+        self.file_menu_open = false;
+    }
+
+    /// Whether any menu dropdown is open.
+    pub fn menu_open(&self) -> bool {
+        self.file_menu_open || self.edit_menu_open
     }
 
     pub fn close_menus(&mut self) {
         self.file_menu_open = false;
+        self.edit_menu_open = false;
     }
 }
 
@@ -651,9 +677,18 @@ mod tests {
             .iter()
             .flat_map(|c| c.keystrokes().iter().copied())
             .chain(FileCommand::ALL.iter().map(|c| c.keystroke()))
+            .chain(
+                crate::undo_ops::EditCommand::ALL
+                    .iter()
+                    .flat_map(|c| c.keystrokes().iter().copied()),
+            )
             .collect();
         let n: usize = ViewCommand::ALL.iter().map(|c| c.keystrokes().len()).sum();
-        assert_eq!(keys.len(), n + FileCommand::ALL.len());
+        let e: usize = crate::undo_ops::EditCommand::ALL
+            .iter()
+            .map(|c| c.keystrokes().len())
+            .sum();
+        assert_eq!(keys.len(), n + e + FileCommand::ALL.len());
     }
 
     #[test]

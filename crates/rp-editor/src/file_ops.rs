@@ -7,10 +7,11 @@
 //!
 //! Decisions:
 //! - **Dirty** means the document differs from what was last saved or
-//!   opened. Pixel and settings edits bump [`EditorState::doc_version`];
-//!   the brush colors and swatches are saved too but never bump it, so the
-//!   [`SavedMark`] also records them. Changing a color and changing it back
-//!   is clean again.
+//!   opened. Pixel and settings edits change [`EditorState::content`], and
+//!   undo/redo restore it (see [`crate::undo_ops`]), so undoing back to the
+//!   saved state is clean again. The brush colors and swatches are saved
+//!   too but never change it, so the [`SavedMark`] also records them.
+//!   Changing a color and changing it back is clean again.
 //! - A save records the mark taken when it **started**, so an edit made
 //!   while the file is being written leaves the document dirty.
 //! - New, Open and Quit with a dirty document ask Save / Don't Save /
@@ -38,7 +39,8 @@ pub const UNTITLED: &str = "Untitled";
 /// What a document looked like when it was last saved or opened.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct SavedMark {
-    pub doc_version: u64,
+    /// [`EditorState::content`] when saved.
+    pub content: u64,
     pub fg: Rgb,
     pub bg: Rgb,
     pub swatches: Vec<Rgb>,
@@ -48,7 +50,7 @@ impl SavedMark {
     pub fn of(state: &EditorState) -> Self {
         let d = &state.document;
         Self {
-            doc_version: state.doc_version,
+            content: state.content,
             fg: d.fg,
             bg: d.bg,
             swatches: d.swatches.clone(),

@@ -31,6 +31,7 @@ pub mod state;
 pub mod swatch_ops;
 mod swatches_panel;
 pub mod transform_ops;
+pub mod undo_ops;
 mod view;
 pub mod viewport;
 

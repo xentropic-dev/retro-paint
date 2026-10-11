@@ -165,7 +165,14 @@ impl EditorState {
 
     /// Adds `loaded` as an image layer above the selection, fitted to the
     /// canvas, and selects it. The source is stored once per hash.
+    /// One undo step; undo leaves the source in the store so redo works.
     pub fn insert_loaded_image(&mut self, loaded: LoadedImage) -> LayerId {
+        self.record(crate::undo_ops::EditLabel::InsertImage, |s| {
+            s.insert_loaded_image_now(loaded)
+        })
+    }
+
+    fn insert_loaded_image_now(&mut self, loaded: LoadedImage) -> LayerId {
         let LoadedImage { name, hash, image } = loaded;
         let size = image.size();
         if !self.sources.contains(&hash) {
