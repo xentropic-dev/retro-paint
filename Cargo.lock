@@ -4348,6 +4348,7 @@ dependencies = [
  "raylib",
  "rp-doc",
  "rp-palette-dither",
+ "serde_json",
 ]
 
 [[package]]

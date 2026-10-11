@@ -36,7 +36,8 @@ pub enum WindowSystem {
 
 /// The window size to request when the layout switches, if any. On Wayland
 /// nothing is requested: the window keeps the size the compositor gave it
-/// and the tube is refit into it (see [`frame_tube`]).
+/// and the tube is refit into it (see [`frame_tube`]). Under Hyprland the
+/// compositor is asked for a better shape instead (see [`crate::hypr`]).
 pub const fn layout_switch_size(system: WindowSystem, layout: Layout) -> Option<(i32, i32)> {
     match system {
         WindowSystem::Wayland => None,

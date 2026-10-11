@@ -8,6 +8,7 @@ use raylib::prelude::*;
 use rp_doc::{FrameMsg, Layout};
 
 use crate::crt::{CRT_FS, CrtParams};
+use crate::hypr::HyprResizer;
 use crate::view::{
     Change, DosState, StopSignal, WindowSystem, frame_tube, idle_frame, layout_switch_size,
     window_size,
@@ -71,6 +72,12 @@ fn run(initial: FrameMsg, rx: Option<&FrameReceiver>, stop: &StopSignal) {
     // The DOS window takes no input: Escape must not close it.
     rl.set_exit_key(None);
     let system = window_system();
+    // Under Hyprland, layout switches also ask the compositor for a 9:16 /
+    // 16:9 window (off this thread; the refit below still decides drawing).
+    let hypr = match system {
+        WindowSystem::Wayland => HyprResizer::from_env(),
+        WindowSystem::Other => None,
+    };
 
     let params = CrtParams::default();
     let mut shader = rl.load_shader_from_memory(&thread, None, Some(CRT_FS));
@@ -103,6 +110,9 @@ fn run(initial: FrameMsg, rx: Option<&FrameReceiver>, stop: &StopSignal) {
             Change::Layout => {
                 if let Some((w, h)) = layout_switch_size(system, state.layout()) {
                     rl.set_window_size(w, h);
+                }
+                if let Some(hypr) = &hypr {
+                    hypr.request(state.layout());
                 }
                 texture = screen_texture(&mut rl, &thread, state.screen());
                 upload(&mut texture, state.screen(), &mut rgba);

@@ -115,7 +115,7 @@ Three separate sizes are involved:
 
 **Project Settings** (File > Project Settings…, Ctrl+Shift+P) is a modal dialog that edits a draft of all three settings and applies it as one document edit (one undo step; the edit returns the document as it was). Nothing changes until Apply; Cancel or Escape discards the draft, Enter applies.
 
-- **Layout:** Mobile (9:16, 200×320 DOS screen) or Desktop (16:9, 320×200). Switching refits the tube into the DOS window (on Wayland the window keeps its compositor-given size; see tech-stack).
+- **Layout:** Mobile (9:16, 200×320 DOS screen) or Desktop (16:9, 320×200). Switching refits the tube into the DOS window (under Hyprland the window is also resized to 9:16 / 16:9 for its monitor; on other Wayland compositors it keeps its compositor-given size; see tech-stack).
 - **Canvas:** W×H fields (click a number and type, Enter or Tab sets it), −100/−10/+10/+100 steppers, presets 800×1280, 1280×800, 1600×2560, 2560×1600, and a 3×3 anchor grid (default center). Sides are clamped to 1–8192.
 - **Output:** W×H fields with −10/−1/+1/+10 steppers, presets canvas ÷ 1, ÷ 2, ÷ 3, ÷ 4, ÷ 8 (rounded down, at least 1) and DOS-native (the layout's DOS screen size).
 - **Output link:** while a ÷ N preset is chosen, the output follows canvas ÷ N when the canvas size changes. The link is on when the dialog opens if the output already equals canvas ÷ N for a preset N (so a new document, 800×1280 → 200×320, stays ÷ 4). Typing or stepping the output, or picking DOS-native, unlinks it. An unlinked DOS-native output follows a layout switch (200×320 ↔ 320×200).

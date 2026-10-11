@@ -13,6 +13,7 @@ use rp_doc::FrameMsg;
 mod compose;
 pub mod crt;
 mod glyphs;
+pub mod hypr;
 pub mod sample;
 mod screen;
 mod scroll;
