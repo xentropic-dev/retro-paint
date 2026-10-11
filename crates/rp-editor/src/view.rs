@@ -72,8 +72,10 @@ pub fn bind_keys(cx: &mut App) {
             EditCommand::Redo => KeyBinding::new(k, Redo, None),
             EditCommand::Paste => KeyBinding::new(k, Paste, None),
             EditCommand::DuplicateLayer => KeyBinding::new(k, DuplicateLayer, None),
-            EditCommand::FlipHorizontal | EditCommand::FlipVertical => {
-                unreachable!("flips have no key binding")
+            EditCommand::FlipHorizontal
+            | EditCommand::FlipVertical
+            | EditCommand::RasterizeLayer => {
+                unreachable!("flips and rasterize have no key binding")
             }
         }));
     }

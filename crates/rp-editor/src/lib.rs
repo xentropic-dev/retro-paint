@@ -28,6 +28,7 @@ pub mod panel_layout;
 pub mod paste_ops;
 mod project_dialog;
 pub mod project_ops;
+pub mod rasterize_ops;
 pub mod render_worker;
 pub mod state;
 pub mod swatch_ops;

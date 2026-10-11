@@ -388,6 +388,13 @@ impl LayersPanel {
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.edit(cx, |s| s.flip_selected_layer(FlipAxis::Vertical));
                     })),
+            )
+            .child(
+                button("layer-rasterize", "Rasterize")
+                    .flex_1()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.edit(cx, |s| s.rasterize_selected_layer());
+                    })),
             );
         div()
             .flex()

@@ -73,6 +73,7 @@ pub enum EditLabel {
     DuplicateLayer,
     FlipHorizontal,
     FlipVertical,
+    RasterizeLayer,
 }
 
 impl EditLabel {
@@ -103,6 +104,7 @@ impl EditLabel {
             EditLabel::DuplicateLayer => "Duplicate Layer",
             EditLabel::FlipHorizontal => "Flip Horizontal",
             EditLabel::FlipVertical => "Flip Vertical",
+            EditLabel::RasterizeLayer => "Rasterize Layer",
         }
     }
 }
@@ -365,17 +367,21 @@ pub enum EditCommand {
     FlipHorizontal,
     /// Mirror the selected layer top ↔ bottom.
     FlipVertical,
+    /// Turn the selected image layer into a paint layer (see
+    /// [`crate::rasterize_ops`]).
+    RasterizeLayer,
 }
 
 impl EditCommand {
     /// Every command, in Edit-menu order.
-    pub const ALL: [EditCommand; 6] = [
+    pub const ALL: [EditCommand; 7] = [
         EditCommand::Undo,
         EditCommand::Redo,
         EditCommand::Paste,
         EditCommand::DuplicateLayer,
         EditCommand::FlipHorizontal,
         EditCommand::FlipVertical,
+        EditCommand::RasterizeLayer,
     ];
 
     /// GPUI keystroke strings bound to the command (possibly none); the
@@ -386,7 +392,9 @@ impl EditCommand {
             EditCommand::Redo => &["ctrl-shift-z", "ctrl-y"],
             EditCommand::Paste => &["ctrl-v"],
             EditCommand::DuplicateLayer => &["ctrl-j"],
-            EditCommand::FlipHorizontal | EditCommand::FlipVertical => &[],
+            EditCommand::FlipHorizontal
+            | EditCommand::FlipVertical
+            | EditCommand::RasterizeLayer => &[],
         }
     }
 
@@ -398,6 +406,7 @@ impl EditCommand {
             EditCommand::DuplicateLayer => "Duplicate Layer",
             EditCommand::FlipHorizontal => "Flip Horizontal",
             EditCommand::FlipVertical => "Flip Vertical",
+            EditCommand::RasterizeLayer => "Rasterize Layer",
         }
     }
 
@@ -500,6 +509,7 @@ impl EditorState {
             EditCommand::FlipVertical => {
                 self.layer_command(|s| s.flip_selected_layer(FlipAxis::Vertical))
             }
+            EditCommand::RasterizeLayer => self.layer_command(|s| s.rasterize_selected_layer()),
         }
     }
 

@@ -337,7 +337,9 @@ impl EditorState {
             let name = &layer.name;
             self.status = match e {
                 EditError::PixelsLocked => format!("Can't paint: {name} pixels are locked"),
-                EditError::NotAPaintLayer => format!("Can't paint on image layer {name}"),
+                EditError::NotAPaintLayer => {
+                    format!("Can't paint on image layer {name}: Rasterize it to paint")
+                }
                 other => format!("Can't paint: {other}"),
             };
             return false;
