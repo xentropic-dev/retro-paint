@@ -137,13 +137,21 @@ fn prompt_open(state: &Entity<EditorState>, cx: &mut App) {
                 return;
             }
         };
-        let started = weak.update(cx, |s, cx| {
-            s.begin_open(&path);
-            cx.notify();
-        });
-        if started.is_err() {
-            return;
+        if let Some(state) = weak.upgrade() {
+            cx.update(|cx| open_path(&state, path, cx));
         }
+    })
+    .detach();
+}
+
+/// Loads `path` off the UI thread and replaces the document with it.
+pub(crate) fn open_path(state: &Entity<EditorState>, path: PathBuf, cx: &mut App) {
+    state.update(cx, |s, cx| {
+        s.begin_open(&path);
+        cx.notify();
+    });
+    let weak = state.downgrade();
+    cx.spawn(async move |cx| {
         let p = path.clone();
         let result = cx.background_spawn(async move { open_job(&p) }).await;
         let _ = weak.update(cx, |s, cx| {
@@ -158,31 +166,27 @@ fn prompt_open(state: &Entity<EditorState>, cx: &mut App) {
 /// UI thread with the settings from the Export dialog.
 fn prompt_export_path(state: &Entity<EditorState>, cx: &mut App) {
     let name = default_export_name(state.read(cx).current_path.as_deref());
-    prompt_new_path(
-        state,
-        name,
-        "Export PNG",
-        |state, path, cx| {
-            let job = state.update(cx, |s, cx| {
-                cx.notify();
-                s.begin_export(path)
-            });
-            let weak = state.downgrade();
-            cx.spawn(async move |cx| {
-                let p = job.path.clone();
-                let result = cx
-                    .background_spawn(async move {
-                        export_job(&job.document, &job.sources, &job.options, &job.path)
-                    })
-                    .await;
-                let _ = weak.update(cx, |s, cx| {
-                    s.finish_export(&p, result);
-                    cx.notify();
-                });
+    prompt_new_path(state, name, "Export PNG", export_to, |_| {}, cx);
+}
+
+/// Exports to `path` off the UI thread with the last export settings.
+pub(crate) fn export_to(state: &Entity<EditorState>, path: PathBuf, cx: &mut App) {
+    let job = state.update(cx, |s, cx| {
+        cx.notify();
+        s.begin_export(path)
+    });
+    let weak = state.downgrade();
+    cx.spawn(async move |cx| {
+        let p = job.path.clone();
+        let result = cx
+            .background_spawn(async move {
+                export_job(&job.document, &job.sources, &job.options, &job.path)
             })
-            .detach();
-        },
-        |_| {},
-        cx,
-    );
+            .await;
+        let _ = weak.update(cx, |s, cx| {
+            s.finish_export(&p, result);
+            cx.notify();
+        });
+    })
+    .detach();
 }
