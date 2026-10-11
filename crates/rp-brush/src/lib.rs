@@ -53,6 +53,8 @@
 mod abr;
 mod gbr;
 mod library;
+#[doc(hidden)]
+pub mod reference;
 mod resize;
 mod stamp;
 mod vbr;
@@ -61,7 +63,7 @@ pub use abr::{AbrEntry, AbrIndex, decode_abr, decode_abr_data, index_abr, parse_
 pub use gbr::parse_gbr;
 pub use library::{file_stem, load_library, load_library_bytes, parse_gih};
 pub use resize::thumbnail;
-pub use stamp::{Spacer, stamp, stroke_dabs};
+pub use stamp::{Spacer, erase_dab, mask_dab, stamp, stroke_dabs};
 pub use vbr::{Shape, VbrParams, generate, parse_vbr};
 
 use std::fmt;
