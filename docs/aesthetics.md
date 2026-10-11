@@ -35,7 +35,7 @@ The editor and DOS view are always two separate OS windows. With one screen, the
 
 ## Full-color view (left)
 
-- File menu at the top (save, open, and PNG export; see [File Format](file-format.md)).
+- File menu at the top (save, open, PNG export, see [File Format](file-format.md); and Project Settings, see [Canvas, output, and screen resolutions](#canvas-output-and-screen-resolutions)).
 - Toolbar ribbon at the top.
 - Full set of tools.
 - Layer selection panel, inspired by GIMP or Photoshop.
@@ -97,6 +97,15 @@ Three separate sizes are involved:
 | **Canvas** | The full-color working image in the native editor. | User, any size. |
 | **Output** | The dithered CGA image. The dither runs at this size, PNG export uses it, and the DOS app's canvas window shows it at 1:1. | User, per project. For example, canvas ÷ 4. |
 | **DOS screen** | The fake DOS app's whole screen, including its toolbars and canvas window. | Fixed: 320×200 (desktop) or 200×320 (mobile). |
+
+**Project Settings** (File > Project Settings…, Ctrl+Shift+P) is a modal dialog that edits a draft of all three settings and applies it as one document edit (one undo step; the edit returns the document as it was). Nothing changes until Apply; Cancel or Escape discards the draft, Enter applies.
+
+- **Layout:** Mobile (9:16, 200×320 DOS screen) or Desktop (16:9, 320×200). Switching resizes the DOS window.
+- **Canvas:** W×H fields (click a number and type, Enter or Tab sets it), −100/−10/+10/+100 steppers, presets 800×1280, 1280×800, 1600×2560, 2560×1600, and a 3×3 anchor grid (default center). Sides are clamped to 1–8192.
+- **Output:** W×H fields with −10/−1/+1/+10 steppers, presets canvas ÷ 1, ÷ 2, ÷ 3, ÷ 4, ÷ 8 (rounded down, at least 1) and DOS-native (the layout's DOS screen size).
+- **Output link:** while a ÷ N preset is chosen, the output follows canvas ÷ N when the canvas size changes. The link is on when the dialog opens if the output already equals canvas ÷ N for a preset N (so a new document, 800×1280 → 200×320, stays ÷ 4). Typing or stepping the output, or picking DOS-native, unlinks it. An unlinked DOS-native output follows a layout switch (200×320 ↔ 320×200).
+- **Canvas resize never resamples.** All content moves by the anchor offset (0 at the anchored edge, the whole growth at the far edge, half of it rounded down in the middle). Paint layers are cropped or padded with transparency and rebased to offset 0, so pixels already off the canvas are dropped. Masks are cropped or padded with 255 (unmasked). Image layers keep their full-resolution source, scale and rotation and only shift. Locks do not block a canvas resize. The view refits afterwards.
+- File > New still makes the default document (800×1280, mobile, output ÷ 4); change it with Project Settings.
 
 Navigation:
 
