@@ -12,11 +12,14 @@
 //!   are bilinear-sampled (see [`flatten`](mod@flatten)).
 //! - [`FrameMsg`]: the editor → DOS view message (indexed output image,
 //!   cursor in output pixels, active tool, active color).
+//! - [`History`]: memory-bounded undo/redo of whole-document snapshots and
+//!   paint-layer dirty-rect patches (see [`history`]).
 
 pub mod blend;
 mod document;
 pub mod flatten;
 mod frame;
+pub mod history;
 mod layer;
 mod raster;
 
@@ -24,6 +27,7 @@ pub use blend::BlendMode;
 pub use document::{Document, Layout};
 pub use flatten::{SourceStore, flatten};
 pub use frame::{FrameMsg, IndexedFrame, OutputPoint, Tool};
+pub use history::{Edit, EditKind, History, Rect};
 pub use layer::{
     EditError, ImageLayer, Layer, LayerId, LayerKind, Lock, PaintLayer, SourceHash, Transform,
 };
