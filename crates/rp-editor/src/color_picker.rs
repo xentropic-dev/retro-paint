@@ -10,15 +10,16 @@ use std::sync::Arc;
 
 use gpui::{
     App, Bounds, Context, DispatchPhase, Div, Entity, FocusHandle, KeyDownEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, RenderImage, SharedString, Window,
-    canvas, div, img, prelude::*, px, rgb,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Point, RenderImage,
+    SharedString, Window, canvas, div, img, linear_color_stop, linear_gradient, prelude::*, px,
+    rgb,
 };
 use rp_palette_dither::CGA_RGB;
 
 use crate::canvas_image::rgba_into_bgra;
 use crate::color_picker_ops::{
-    ColorPicker, LutCache, PickerDrag, PickerField, PickerTarget, dithers_to, hue_bar_rgba,
-    hue_pos, square_pos, square_rgba,
+    ColorPicker, HUE_STOPS, LutCache, PickerDrag, PickerField, PickerTarget, dithers_to, hue_pos,
+    square_pos, square_rgba,
 };
 use crate::filter_ops::color_name;
 use crate::project_dialog::chip;
@@ -30,7 +31,6 @@ const SQUARE_IMG: u32 = 128;
 /// On-screen side of the square.
 const SQUARE_PX: f32 = 168.;
 const HUE_W: f32 = 18.;
-const HUE_IMG_H: u32 = 256;
 const DIALOG_W: f32 = 344.;
 const CGA_CELL: f32 = 17.;
 
@@ -43,7 +43,6 @@ pub(crate) struct ColorPickerDialog {
     lut: LutCache,
     /// The square image and the hue it was built for.
     square: Option<(f32, Arc<RenderImage>)>,
-    hue_bar: Arc<RenderImage>,
     /// Replaced square images, freed on the next render.
     stale: Vec<Arc<RenderImage>>,
 }
@@ -67,7 +66,6 @@ impl ColorPickerDialog {
             editor_focus,
             lut: LutCache::default(),
             square: None,
-            hue_bar: render_image(1, HUE_IMG_H, hue_bar_rgba(1, HUE_IMG_H)),
             stale: Vec::new(),
         }
     }
@@ -216,7 +214,12 @@ impl ColorPickerDialog {
             .border_1()
             .border_color(rgb(BORDER))
             .cursor_crosshair()
-            .child(img(image).size_full())
+            .child(
+                img(image)
+                    .w(px(SQUARE_PX - 2.))
+                    .h(px(SQUARE_PX - 2.))
+                    .object_fit(ObjectFit::Fill),
+            )
             .child(
                 div()
                     .absolute()
@@ -233,6 +236,15 @@ impl ColorPickerDialog {
 
     fn hue_bar(&self, p: &ColorPicker, cx: &mut Context<Self>) -> Div {
         let y = hue_pos(p.hsv.h, SQUARE_PX);
+        let seg = (SQUARE_PX - 2.) / 6.;
+        let mut stops = div().flex().flex_col();
+        for w in HUE_STOPS.windows(2) {
+            stops = stops.child(div().w_full().h(px(seg)).bg(linear_gradient(
+                180.,
+                linear_color_stop(rgba(w[0]), 0.),
+                linear_color_stop(rgba(w[1]), 1.),
+            )));
+        }
         div()
             .relative()
             .flex_none()
@@ -241,7 +253,7 @@ impl ColorPickerDialog {
             .border_1()
             .border_color(rgb(BORDER))
             .cursor_pointer()
-            .child(img(self.hue_bar.clone()).size_full())
+            .child(stops)
             .child(
                 div()
                     .absolute()
@@ -305,6 +317,7 @@ impl ColorPickerDialog {
         let compare = div()
             .flex()
             .flex_row()
+            .flex_none()
             .child(
                 div()
                     .id("picker-old")
@@ -338,7 +351,13 @@ impl ColorPickerDialog {
                             .child(div().w(px(48.)).child("Old"))
                             .child(div().w(px(48.)).child("New")),
                     )
-                    .child(div().border_1().border_color(rgb(BORDER)).child(compare)),
+                    .child(
+                        div()
+                            .w(px(98.))
+                            .border_1()
+                            .border_color(rgb(BORDER))
+                            .child(compare),
+                    ),
             )
             .child(
                 div()

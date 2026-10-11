@@ -156,18 +156,18 @@ pub fn square_rgba(hue: f32, side: u32) -> Vec<u8> {
     out
 }
 
-/// An RGBA image (`width × height`) of the hue bar: row `y` shows the
-/// fully saturated, full-value color [`hue_at`] gives for its center.
-pub fn hue_bar_rgba(width: u32, height: u32) -> Vec<u8> {
-    let mut out = Vec::with_capacity((width * height * 4) as usize);
-    for y in 0..height {
-        let c = Hsv::new(hue_at(y as f32 + 0.5, height as f32), 1.0, 1.0).to_rgb();
-        for _ in 0..width {
-            out.extend_from_slice(&[c.r, c.g, c.b, 255]);
-        }
-    }
-    out
-}
+/// The hue bar's colors at hue 0, 60, …, 360 (top to bottom). Between two
+/// stops the full-saturation, full-value hue ramp is a straight line in
+/// sRGB, so the bar is six two-stop sRGB gradients.
+pub const HUE_STOPS: [Rgb; 7] = [
+    Rgb::new(255, 0, 0),
+    Rgb::new(255, 255, 0),
+    Rgb::new(0, 255, 0),
+    Rgb::new(0, 255, 255),
+    Rgb::new(0, 0, 255),
+    Rgb::new(255, 0, 255),
+    Rgb::new(255, 0, 0),
+];
 
 /// The palette color a flat area of `c` becomes in the dither: the active
 /// pre-adjust, then the nearest palette color (no dither pattern).
@@ -594,9 +594,19 @@ mod tests {
         assert!(px(15, 0).g > 240 && px(15, 0).r < 16);
         assert!(px(0, 15).r < 16);
 
-        let bar = hue_bar_rgba(2, 6);
-        assert_eq!(bar.len(), 2 * 6 * 4);
-        assert_eq!(&bar[0..4], &[255, 128, 0, 255]); // hue 30 at row 0's center
+        // The hue bar's gradient stops are the HSV hues they stand for,
+        // and the ramp between two stops is linear in sRGB.
+        for (i, &c) in HUE_STOPS.iter().enumerate() {
+            let h = 60.0 * i as f32;
+            assert_eq!(Hsv::new(h, 1.0, 1.0).to_rgb(), c);
+            if let Some(&next) = HUE_STOPS.get(i + 1) {
+                for t in [0.25f32, 0.5, 0.75] {
+                    let mix = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t).round() as u8;
+                    let want = Rgb::new(mix(c.r, next.r), mix(c.g, next.g), mix(c.b, next.b));
+                    assert_eq!(Hsv::new(h + 60.0 * t, 1.0, 1.0).to_rgb(), want, "{h} {t}");
+                }
+            }
+        }
     }
 
     #[test]
@@ -719,6 +729,7 @@ mod tests {
         st.open_color_picker(PickerTarget::Foreground);
         st.edit_color_picker(|p| p.set_rgb(Rgb::new(1, 2, 3)));
         assert_eq!(st.document.fg, Rgb::new(1, 2, 3));
+        assert!(st.is_dirty());
         // Overlay only: no re-dither.
         assert_eq!(st.doc_version, v);
         assert_eq!(
@@ -728,6 +739,7 @@ mod tests {
         st.cancel_color_picker();
         assert!(st.color_picker.is_none());
         assert_eq!(st.document.fg, old);
+        assert!(!st.is_dirty());
         assert!(st.history.undo_label().is_none());
     }
 

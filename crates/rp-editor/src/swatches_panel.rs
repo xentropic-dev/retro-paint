@@ -47,6 +47,7 @@ impl Render for SwatchesPanel {
         let controls = div()
             .flex()
             .flex_row()
+            .flex_wrap()
             .items_center()
             .gap_1()
             .px_2()
