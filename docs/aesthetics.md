@@ -79,6 +79,15 @@ Top of the right-hand panel column. The list shows the top of the stack at the t
 - Locked layers and image layers refuse strokes; the status bar says why.
 - The DOS cursor's brush outline is the brush size in output pixels (size × output / canvas).
 
+### Colors and swatches
+
+- The ribbon's right end shows the foreground chip over the background chip. **⇄** next to them (or `X`) swaps them; **◩** (or `D`) resets to black foreground, white background, GIMP-style. `X` and `D` work with no modifiers held and not while renaming a layer.
+- The **Swatches** panel (bottom of the right column) is a grid of the document's saved full-color swatches, oldest first. Click a swatch to set the foreground, right-click to set the background, middle-click to remove it. The swatch equal to the foreground has a white ring.
+- **+ Add fg** saves the foreground at the end. A color that is already saved is not duplicated; it moves to the end. A document keeps at most 64 swatches; adding to a full list is refused with a status message (re-adding a saved color still moves it).
+- **− Remove fg** removes the swatch equal to the foreground (pick it first by clicking it); if none matches, the status bar says so.
+- The picker and the swatches are the ways to set a color in v1; there is no RGB/HSV color editor yet.
+- Colors and swatches are stored in the document (see [File Format](file-format.md)) but are not pixel edits: changing them never re-renders or re-dithers (`doc_version` does not move). A foreground change reaches the DOS view as an overlay update of its active color. For undo: swatch add/remove are document edits and should be undoable steps; fg/bg changes (picker, swatch click, swap, reset) are not undo steps, like GIMP.
+
 ## Canvas, output, and screen resolutions
 
 Three separate sizes are involved:
