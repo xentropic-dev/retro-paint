@@ -30,8 +30,8 @@ pub enum Icon {
     Brush,
     Eraser,
     Picker,
-    /// Not on the ribbon yet: the lasso-tool feature adds the button.
     Lasso,
+    RectSelect,
     InsertImage,
     SizeDown,
     SizeUp,
@@ -42,13 +42,14 @@ pub enum Icon {
 }
 
 impl Icon {
-    pub const ALL: [Icon; 13] = [
+    pub const ALL: [Icon; 14] = [
         Icon::Select,
+        Icon::Lasso,
+        Icon::RectSelect,
         Icon::Move,
         Icon::Brush,
         Icon::Eraser,
         Icon::Picker,
-        Icon::Lasso,
         Icon::InsertImage,
         Icon::SizeDown,
         Icon::SizeUp,
@@ -62,6 +63,8 @@ impl Icon {
     pub const fn for_tool(tool: Tool) -> Icon {
         match tool {
             Tool::Select => Icon::Select,
+            Tool::Lasso => Icon::Lasso,
+            Tool::RectSelect => Icon::RectSelect,
             Tool::Move => Icon::Move,
             Tool::Brush => Icon::Brush,
             Tool::Eraser => Icon::Eraser,
@@ -78,6 +81,7 @@ impl Icon {
             Icon::Eraser => "icons/eraser.svg",
             Icon::Picker => "icons/picker.svg",
             Icon::Lasso => "icons/lasso.svg",
+            Icon::RectSelect => "icons/rect-select.svg",
             Icon::InsertImage => "icons/insert-image.svg",
             Icon::SizeDown => "icons/size-down.svg",
             Icon::SizeUp => "icons/size-up.svg",
@@ -203,6 +207,25 @@ impl Icon {
                 ".....#..........",
                 "......##........",
                 "........#.......",
+                "................",
+            ],
+            // Marching-ants rectangle.
+            Icon::RectSelect => [
+                "................",
+                "................",
+                ".##..##..##..##.",
+                ".#............#.",
+                "................",
+                "..............#.",
+                ".#............#.",
+                ".#..............",
+                "................",
+                ".#............#.",
+                "..............#.",
+                "................",
+                ".#............#.",
+                ".##..##..##..##.",
+                "................",
                 "................",
             ],
             // A picture with a plus: add an image layer.
@@ -392,6 +415,8 @@ impl AssetSource for IconAssets {
 pub const fn tool_shortcut(tool: Tool) -> &'static str {
     match tool {
         Tool::Select => "s",
+        Tool::Lasso => "l",
+        Tool::RectSelect => "r",
         Tool::Move => "m",
         Tool::Brush => "b",
         Tool::Eraser => "e",
@@ -405,7 +430,11 @@ pub fn tool_key(key: &str, plain: bool) -> Option<Tool> {
     if !plain {
         return None;
     }
-    Tool::ALL.into_iter().find(|&t| tool_shortcut(t) == key)
+    Tool::ALL
+        .into_iter()
+        // The lasso-tool feature binds L and R together with the tools' behavior.
+        .filter(|t| !matches!(t, Tool::Lasso | Tool::RectSelect))
+        .find(|&t| tool_shortcut(t) == key)
 }
 
 /// Tooltip text: the name, then the shortcut in parentheses if there is one.
@@ -486,21 +515,32 @@ mod tests {
     fn every_tool_has_an_icon_and_a_unique_key() {
         let icons: HashSet<_> = Tool::ALL.iter().map(|&t| Icon::for_tool(t)).collect();
         assert_eq!(icons.len(), Tool::ALL.len());
-        for t in Tool::ALL {
+        let keys: HashSet<_> = Tool::ALL.iter().map(|&t| tool_shortcut(t)).collect();
+        assert_eq!(keys.len(), Tool::ALL.len());
+        for t in [
+            Tool::Select,
+            Tool::Move,
+            Tool::Brush,
+            Tool::Eraser,
+            Tool::Picker,
+        ] {
             assert_eq!(tool_key(tool_shortcut(t), true), Some(t));
             assert_eq!(tool_key(tool_shortcut(t), false), None);
         }
         // Must not steal the color keys.
         assert_eq!(tool_key("x", true), None);
         assert_eq!(tool_key("d", true), None);
-        // Reserved for the Lasso tool.
+        // Not bound yet (lasso-tool binds them).
         assert_eq!(tool_key("l", true), None);
+        assert_eq!(tool_key("r", true), None);
     }
 
     #[test]
     fn tooltips_name_the_shortcut() {
         assert_eq!(tool_tooltip(Tool::Brush), "Brush (B)");
         assert_eq!(tool_tooltip(Tool::Picker), "Picker (I)");
+        assert_eq!(tool_tooltip(Tool::Lasso), "Lasso (L)");
+        assert_eq!(tool_tooltip(Tool::RectSelect), "Rect Select (R)");
         assert_eq!(tooltip_text("Hard brush", None), "Hard brush");
         assert_eq!(tooltip_text("Swap colors", Some("X")), "Swap colors (X)");
     }
