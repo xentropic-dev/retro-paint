@@ -18,6 +18,7 @@ mod file_flow;
 pub mod file_ops;
 pub mod filter_ops;
 mod filter_panel;
+pub mod flip_ops;
 pub mod image_ops;
 mod insert_flow;
 pub mod layer_ops;

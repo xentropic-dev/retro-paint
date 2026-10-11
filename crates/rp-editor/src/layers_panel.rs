@@ -2,8 +2,8 @@
 //!
 //! GIMP/Photoshop-like: controls for the selected layer (blend mode,
 //! opacity, locks, mask) above a list with the top of the stack at the top,
-//! and New / Image / Delete / Up / Down buttons below it (Image is Insert
-//! Image…). Click a row to select it,
+//! and two rows of buttons below it: New / Image / Delete / Up / Down (Image
+//! is Insert Image…) and Duplicate / Flip H / Flip V. Click a row to select it,
 //! double-click its name to rename it inline (Enter applies, Escape cancels,
 //! clicking elsewhere applies). Thin: every command is an
 //! [`EditorState`] method in [`crate::layer_ops`].
@@ -14,6 +14,7 @@ use gpui::{
 };
 use rp_doc::{BlendMode, Layer, LayerId, LayerKind};
 
+use crate::flip_ops::FlipAxis;
 use crate::insert_flow::prompt_insert_image;
 use crate::layer_ops::OPACITY_STEP;
 use crate::state::EditorState;
@@ -327,50 +328,78 @@ impl LayersPanel {
     }
 
     fn footer(&self, cx: &mut Context<Self>) -> Div {
-        div()
+        let first =
+            div()
+                .flex()
+                .flex_row()
+                .gap_1()
+                .child(button("layer-new", "New").flex_1().on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.edit(cx, |s| s.add_paint_layer());
+                    },
+                )))
+                .child(
+                    button("layer-image", "Image")
+                        .flex_1()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            prompt_insert_image(&this.state, cx);
+                        })),
+                )
+                .child(
+                    button("layer-delete", "Delete")
+                        .flex_1()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.edit(cx, |s| s.delete_selected_layer());
+                        })),
+                )
+                .child(
+                    button("layer-up", "Up")
+                        .flex_1()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.edit(cx, |s| s.move_selected_layer(true));
+                        })),
+                )
+                .child(button("layer-down", "Down").flex_1().on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.edit(cx, |s| s.move_selected_layer(false));
+                    },
+                )));
+        let second = div()
             .flex()
             .flex_row()
+            .gap_1()
+            .child(
+                button("layer-duplicate", "Duplicate")
+                    .flex_1()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.edit(cx, |s| s.duplicate_selected_layer());
+                    })),
+            )
+            .child(
+                button("layer-flip-h", "Flip H")
+                    .flex_1()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.edit(cx, |s| s.flip_selected_layer(FlipAxis::Horizontal));
+                    })),
+            )
+            .child(
+                button("layer-flip-v", "Flip V")
+                    .flex_1()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.edit(cx, |s| s.flip_selected_layer(FlipAxis::Vertical));
+                    })),
+            );
+        div()
+            .flex()
+            .flex_col()
             .gap_1()
             .p_1()
             .text_xs()
             .border_t_1()
             .border_color(rgb(BORDER))
             .bg(rgb(BG_PANEL_HEADER))
-            .child(
-                button("layer-new", "New")
-                    .flex_1()
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.edit(cx, |s| s.add_paint_layer());
-                    })),
-            )
-            .child(
-                button("layer-image", "Image")
-                    .flex_1()
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        prompt_insert_image(&this.state, cx);
-                    })),
-            )
-            .child(
-                button("layer-delete", "Delete")
-                    .flex_1()
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.edit(cx, |s| s.delete_selected_layer());
-                    })),
-            )
-            .child(
-                button("layer-up", "Up")
-                    .flex_1()
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.edit(cx, |s| s.move_selected_layer(true));
-                    })),
-            )
-            .child(
-                button("layer-down", "Down")
-                    .flex_1()
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.edit(cx, |s| s.move_selected_layer(false));
-                    })),
-            )
+            .child(first)
+            .child(second)
     }
 }
 

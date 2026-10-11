@@ -35,7 +35,7 @@ The editor and DOS view are always two separate OS windows. With one screen, the
 
 ## Full-color view (left)
 
-- File and Edit menus at the top. File: New (Ctrl+N), Open… (Ctrl+O), Insert Image… (Ctrl+I), Save (Ctrl+S), Save As… (Ctrl+Shift+S), Export PNG… (Ctrl+E), see [File Format](file-format.md); Project Settings… (Ctrl+Shift+P), see [Canvas, output, and screen resolutions](#canvas-output-and-screen-resolutions); Quit (Ctrl+Q). Edit: Undo (Ctrl+Z), Redo (Ctrl+Shift+Z or Ctrl+Y), see [Undo and redo](#undo-and-redo); Paste (Ctrl+V), see [Inserting images](#inserting-images).
+- File and Edit menus at the top. File: New (Ctrl+N), Open… (Ctrl+O), Insert Image… (Ctrl+I), Save (Ctrl+S), Save As… (Ctrl+Shift+S), Export PNG… (Ctrl+E), see [File Format](file-format.md); Project Settings… (Ctrl+Shift+P), see [Canvas, output, and screen resolutions](#canvas-output-and-screen-resolutions); Quit (Ctrl+Q). Edit: Undo (Ctrl+Z), Redo (Ctrl+Shift+Z or Ctrl+Y), see [Undo and redo](#undo-and-redo); Paste (Ctrl+V), see [Inserting images](#inserting-images); Duplicate Layer (Ctrl+J), Flip Horizontal, Flip Vertical, see [Layers panel](#layers-panel).
 - Toolbar ribbon at the top.
 - Full set of tools.
 - Layer selection panel, inspired by GIMP or Photoshop.
@@ -49,12 +49,15 @@ The right-hand column (260 px wide) holds Layers, Filter and Swatches, top to bo
 
 ### Layers panel
 
-Top of the right-hand panel column. The list shows the top of the stack at the top. Each row has a visibility toggle, the name, and badges for an image layer (IMG), a pixel or position lock (LOCK) and a mask (MASK); the selected row is highlighted. Click a row to select it; double-click it to rename inline (Enter applies, Escape cancels, clicking elsewhere applies; an empty name keeps the old one). Above the list are controls for the selected layer: blend mode (Normal, Multiply, Screen, Overlay), opacity (a click-to-set bar in 5% segments plus −/+ steppers of 5%), Pixels and Position lock toggles, and Add/Remove mask. Below it are New, Image, Delete, Up and Down.
+Top of the right-hand panel column. The list shows the top of the stack at the top. Each row has a visibility toggle, the name, and badges for an image layer (IMG), a pixel or position lock (LOCK) and a mask (MASK); the selected row is highlighted. Click a row to select it; double-click it to rename inline (Enter applies, Escape cancels, clicking elsewhere applies; an empty name keeps the old one). Above the list are controls for the selected layer: blend mode (Normal, Multiply, Screen, Overlay), opacity (a click-to-set bar in 5% segments plus −/+ steppers of 5%), Pixels and Position lock toggles, and Add/Remove mask. Below it are two rows of buttons: New, Image, Delete, Up and Down; then Duplicate, Flip H and Flip V.
 
 - **New** adds a transparent, canvas-sized paint layer directly above the selected layer, named `Layer N` (one more than the highest existing `Layer N`), and selects it.
 - **Image** is File > Insert Image… (see below).
 - **Delete** removes the selected layer, then selects the layer that was below it (or the new bottom layer). The last remaining layer cannot be deleted.
 - **Up / Down** move the selected layer one step and stop at the ends.
+- **Duplicate** (also Edit > Duplicate Layer, Ctrl+J) inserts a copy of the selected layer directly above it, named `<name> copy`, and selects it. Everything is copied: visibility, opacity, blend mode, locks, mask, and offset or transform. Paint pixels and masks are shared copy-on-write and an image copy references the same source, so a duplicate costs no memory until one side is edited. Locks never refuse a duplicate.
+- **Flip H / Flip V** (also Edit > Flip Horizontal / Flip Vertical, no shortcut) mirror the selected layer as seen on screen. A paint layer mirrors its pixels about its own bounds (it does not move); a pixel lock refuses this, a position lock does not. An image layer mirrors its transform about the image center: the scale on that axis is negated and so is the rotation, so a rotated image flips about the canvas axis; the center stays put. A position lock refuses this, a pixel lock does not. The status bar says why a flip was refused.
+- Flipping a paint layer also flips its mask about the same bounds, so they stay matched. Where the layer reaches past the canvas (and so past the mask), mask values mirrored out are dropped and the part mirrored in shows the layer (255, like an absent mask pixel); mask pixels outside the layer's bounds don't change. Flipping an image layer leaves its mask in place, like a transform.
 - **Add mask** creates an all-white (fully showing) canvas-sized grayscale mask. Masks live in canvas space: moving, scaling or rotating the layer leaves its mask where it is (v1 decision).
 - A new or opened document selects its top layer.
 
@@ -96,7 +99,7 @@ Top of the right-hand panel column. The list shows the top of the stack at the t
 ### Undo and redo
 
 - **Edit > Undo** (Ctrl+Z) and **Edit > Redo** (Ctrl+Shift+Z or Ctrl+Y) cover every document edit. The Edit menu sits next to File and names the step ("Undo Brush Stroke"); an entry is greyed out when there is nothing to undo or redo.
-- One step each: a brush or eraser stroke (press to release), a move / scale / rotate drag, each Layers-panel command (an inline rename counts once, when committed), each filter change, each inserted image, Project Settings Apply, swatch add and remove.
+- One step each: a brush or eraser stroke (press to release), a move / scale / rotate drag, each Layers-panel command including Duplicate and each Flip (an inline rename counts once, when committed), each filter change, each inserted image, Project Settings Apply, swatch add and remove.
 - Runs of the same control merge into one step while nothing else is recorded in between: one filter slider (bar clicks and −/+ steps; Reset is its own step), one layer's opacity, and arrow-key nudges of one layer.
 - Not steps: fg/bg colors, layer selection, tool, brush, zoom and scroll, panel collapse. Undo and redo keep the current fg/bg.
 - Undo during a stroke or drag finishes it and undoes it; it cancels an inline rename. Undo and redo do nothing while a dialog is open. If the selected layer is gone afterwards, the top layer is selected; a changed canvas size refits the view.

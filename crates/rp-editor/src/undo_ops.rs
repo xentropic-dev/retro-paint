@@ -42,6 +42,7 @@ use rp_doc::history::DEFAULT_BUDGET;
 use rp_doc::{Document, Edit, History, Layer, LayerId, Rect};
 
 use crate::filter_ops::FilterSlider;
+use crate::flip_ops::FlipAxis;
 use crate::state::EditorState;
 
 /// What a step did, for the Edit menu ("Undo Brush Stroke").
@@ -69,6 +70,9 @@ pub enum EditLabel {
     ProjectSettings,
     AddSwatch,
     RemoveSwatch,
+    DuplicateLayer,
+    FlipHorizontal,
+    FlipVertical,
 }
 
 impl EditLabel {
@@ -96,6 +100,9 @@ impl EditLabel {
             EditLabel::ProjectSettings => "Project Settings",
             EditLabel::AddSwatch => "Add Swatch",
             EditLabel::RemoveSwatch => "Remove Swatch",
+            EditLabel::DuplicateLayer => "Duplicate Layer",
+            EditLabel::FlipHorizontal => "Flip Horizontal",
+            EditLabel::FlipVertical => "Flip Vertical",
         }
     }
 }
@@ -352,19 +359,34 @@ pub enum EditCommand {
     /// Paste an image or image files from the clipboard. The view reads the
     /// clipboard (see `insert_flow::paste_from_clipboard`).
     Paste,
+    /// Duplicate the selected layer (see [`crate::flip_ops`]).
+    DuplicateLayer,
+    /// Mirror the selected layer left ↔ right.
+    FlipHorizontal,
+    /// Mirror the selected layer top ↔ bottom.
+    FlipVertical,
 }
 
 impl EditCommand {
     /// Every command, in Edit-menu order.
-    pub const ALL: [EditCommand; 3] = [EditCommand::Undo, EditCommand::Redo, EditCommand::Paste];
+    pub const ALL: [EditCommand; 6] = [
+        EditCommand::Undo,
+        EditCommand::Redo,
+        EditCommand::Paste,
+        EditCommand::DuplicateLayer,
+        EditCommand::FlipHorizontal,
+        EditCommand::FlipVertical,
+    ];
 
-    /// GPUI keystroke strings bound to the command; the first is shown in
-    /// the menu.
+    /// GPUI keystroke strings bound to the command (possibly none); the
+    /// first is shown in the menu.
     pub const fn keystrokes(self) -> &'static [&'static str] {
         match self {
             EditCommand::Undo => &["ctrl-z"],
             EditCommand::Redo => &["ctrl-shift-z", "ctrl-y"],
             EditCommand::Paste => &["ctrl-v"],
+            EditCommand::DuplicateLayer => &["ctrl-j"],
+            EditCommand::FlipHorizontal | EditCommand::FlipVertical => &[],
         }
     }
 
@@ -373,12 +395,15 @@ impl EditCommand {
             EditCommand::Undo => "Undo",
             EditCommand::Redo => "Redo",
             EditCommand::Paste => "Paste",
+            EditCommand::DuplicateLayer => "Duplicate Layer",
+            EditCommand::FlipHorizontal => "Flip Horizontal",
+            EditCommand::FlipVertical => "Flip Vertical",
         }
     }
 
     /// Whether the Edit menu draws a separator below this entry.
     pub const fn separator_after(self) -> bool {
-        matches!(self, EditCommand::Redo)
+        matches!(self, EditCommand::Redo | EditCommand::Paste)
     }
 
     /// Menu label: `Undo Brush Stroke`, or just `Undo` with nothing to undo.
@@ -386,7 +411,7 @@ impl EditCommand {
         let step = match self {
             EditCommand::Undo => history.undo_label(),
             EditCommand::Redo => history.redo_label(),
-            EditCommand::Paste => None,
+            _ => None,
         };
         match step {
             Some(l) => format!("{} {}", self.verb(), l.label()),
@@ -399,7 +424,7 @@ impl EditCommand {
         match self {
             EditCommand::Undo => history.can_undo(),
             EditCommand::Redo => history.can_redo(),
-            EditCommand::Paste => true,
+            _ => true,
         }
     }
 }
@@ -468,7 +493,24 @@ impl EditorState {
             EditCommand::Undo => self.undo(),
             EditCommand::Redo => self.redo(),
             EditCommand::Paste => self.begin_paste(),
+            EditCommand::DuplicateLayer => self.layer_command(|s| s.duplicate_selected_layer()),
+            EditCommand::FlipHorizontal => {
+                self.layer_command(|s| s.flip_selected_layer(FlipAxis::Horizontal))
+            }
+            EditCommand::FlipVertical => {
+                self.layer_command(|s| s.flip_selected_layer(FlipAxis::Vertical))
+            }
         }
+    }
+
+    /// A layer command from the Edit menu or a key: nothing while a dialog
+    /// is open; otherwise finishes any gesture first so it stays its own step.
+    fn layer_command(&mut self, f: impl FnOnce(&mut Self) -> bool) -> bool {
+        if self.history_blocked() {
+            return false;
+        }
+        self.finish_gestures();
+        f(self)
     }
 
     /// Ctrl+Z: reverts the newest step. Returns whether anything changed.
@@ -490,7 +532,7 @@ impl EditorState {
             self.status = match cmd {
                 EditCommand::Undo => "Nothing to undo".into(),
                 EditCommand::Redo => "Nothing to redo".into(),
-                EditCommand::Paste => unreachable!("paste is not a history step"),
+                _ => unreachable!("only undo and redo are history steps"),
             };
             return false;
         }
@@ -499,7 +541,7 @@ impl EditorState {
         let applied = match cmd {
             EditCommand::Undo => self.history.undo(&mut self.document),
             EditCommand::Redo => self.history.redo(&mut self.document),
-            EditCommand::Paste => unreachable!("paste is not a history step"),
+            _ => unreachable!("only undo and redo are history steps"),
         };
         let Some(applied) = applied else {
             self.status = "Undo history was out of step with the document and was cleared".into();

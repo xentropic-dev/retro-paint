@@ -46,7 +46,8 @@ actions!(
         FitCanvas,
         Undo,
         Redo,
-        Paste
+        Paste,
+        DuplicateLayer
     ]
 );
 
@@ -70,6 +71,10 @@ pub fn bind_keys(cx: &mut App) {
             EditCommand::Undo => KeyBinding::new(k, Undo, None),
             EditCommand::Redo => KeyBinding::new(k, Redo, None),
             EditCommand::Paste => KeyBinding::new(k, Paste, None),
+            EditCommand::DuplicateLayer => KeyBinding::new(k, DuplicateLayer, None),
+            EditCommand::FlipHorizontal | EditCommand::FlipVertical => {
+                unreachable!("flips have no key binding")
+            }
         }));
     }
     for cmd in ViewCommand::ALL {
@@ -297,6 +302,9 @@ impl EditorView {
     fn on_paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
         paste_from_clipboard(&self.state, cx);
     }
+    fn on_duplicate_layer(&mut self, _: &DuplicateLayer, _: &mut Window, cx: &mut Context<Self>) {
+        self.edit(cx, |s| s.edit_command(EditCommand::DuplicateLayer));
+    }
 
     fn menu_bar(&self, cx: &mut Context<Self>) -> Div {
         let state = self.state.read(cx);
@@ -341,9 +349,11 @@ impl EditorView {
                 .py_1()
                 .child(cmd.menu_label(history))
                 .child(
-                    div()
-                        .text_color(rgb(TEXT_DIM))
-                        .child(shortcut_label(cmd.keystrokes()[0])),
+                    div().text_color(rgb(TEXT_DIM)).child(
+                        cmd.keystrokes()
+                            .first()
+                            .map_or(String::new(), |k| shortcut_label(k)),
+                    ),
                 );
             menu = menu.child(if enabled {
                 item.cursor_pointer()
@@ -967,6 +977,7 @@ impl Render for EditorView {
             .on_action(cx.listener(Self::on_fit))
             .on_action(cx.listener(Self::on_undo))
             .on_action(cx.listener(Self::on_redo))
+            .on_action(cx.listener(Self::on_duplicate_layer))
             .on_key_down(cx.listener(Self::on_key_down))
             .on_key_up(cx.listener(Self::on_key_up))
             .on_modifiers_changed(cx.listener(|this, ev: &ModifiersChangedEvent, _, cx| {

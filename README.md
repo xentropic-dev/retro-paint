@@ -51,6 +51,7 @@ All shortcuts go to the editor window.
 | Ctrl+O | Open a `.rpaint` project |
 | Ctrl+I | Insert image(s) as new layers |
 | Ctrl+V | Paste an image (or copied image files) as new layers |
+| Ctrl+J | Duplicate the selected layer |
 | Ctrl+S / Ctrl+Shift+S | Save / Save As |
 | Ctrl+E | Export PNG |
 | Ctrl+Shift+P | Project Settings |
