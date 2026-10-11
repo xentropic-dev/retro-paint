@@ -26,6 +26,9 @@
 //! - **Combine modes are min/max.** Add keeps `max(old, new)`, Subtract
 //!   `min(old, 255 − new)`, Replace drops the old selection. Both are exact
 //!   and idempotent (adding the same shape twice changes nothing).
+//! - **Invert is `255 − coverage`** over the whole canvas, so soft edges
+//!   stay soft and inverting twice is exact. Bounds are recomputed tight;
+//!   an empty selection inverts to all, all to empty.
 //! - **Bounds-local work.** A polygon is rasterized only inside its own
 //!   bounding box (clipped to the canvas) with an active-edge scan, and
 //!   combining touches only that box plus, for Replace / Subtract, the old
@@ -76,6 +79,7 @@
 //! lasso drag end:  selection.combine_polygon(mode, &points)   // Shift: Add, Alt: Subtract
 //! rect drag end:   selection.combine_rect(mode, rect)
 //! Ctrl+A / Ctrl+D: selection.select_all() / selection.clear()
+//! Ctrl+Shift+I:    selection.invert()
 //! Delete:          history.begin_paint(&doc, layer_id);
 //!                  let hint = erase_selected(doc.layer_mut(layer_id)?, &selection)?;
 //!                  history.commit_within(&doc, hint)
@@ -198,6 +202,17 @@ impl Selection {
         }
         self.coverage.as_raw_mut().fill(255);
         self.bounds = Some(Rect::new(0, 0, size.width, size.height));
+    }
+
+    /// Inverts the selection: every pixel's coverage `c` becomes `255 − c`,
+    /// so soft edges stay soft. Nothing selected inverts to everything and
+    /// everything to nothing. Touches the whole canvas.
+    pub fn invert(&mut self) {
+        for c in self.coverage.as_raw_mut() {
+            *c = 255 - *c;
+        }
+        let size = self.size();
+        self.bounds = tight_bounds(&self.coverage, Rect::new(0, 0, size.width, size.height));
     }
 
     /// Combines the closed polygon `points` with the selection.

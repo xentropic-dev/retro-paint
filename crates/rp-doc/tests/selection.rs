@@ -171,6 +171,46 @@ fn select_all_and_clear() {
 }
 
 #[test]
+fn invert_flips_coverage_and_bounds() {
+    let c = Size::new(4, 3);
+    // Soft right edge: [255, 128, 0, 0] on the middle row only.
+    let mut s = Selection::from_polygon(c, &rect_poly(0.0, 1.0, 1.5, 2.0));
+    assert_eq!(rows(&s)[1], vec![255, 128, 0, 0]);
+    let before = s.clone();
+    s.invert();
+    assert_eq!(
+        rows(&s),
+        vec![
+            vec![255, 255, 255, 255],
+            vec![0, 127, 255, 255],
+            vec![255, 255, 255, 255],
+        ]
+    );
+    assert_eq!(s.bounds(), Some(Rect::new(0, 0, 4, 3)));
+    // Inverting twice gives the original back.
+    s.invert();
+    assert_eq!(s, before);
+
+    // Only the left column inverted: bounds shrink to the rest.
+    let mut s = Selection::from_rect(c, Rect::new(0, 0, 1, 3));
+    s.invert();
+    assert_eq!(s.bounds(), Some(Rect::new(1, 0, 3, 3)));
+
+    // Empty ↔ all.
+    let mut s = Selection::new(c);
+    s.invert();
+    assert_eq!(s, Selection::all(c));
+    s.invert();
+    assert!(s.is_empty());
+    assert_eq!(s, Selection::new(c));
+
+    // A zero-area canvas stays empty.
+    let mut s = Selection::new(Size::new(0, 0));
+    s.invert();
+    assert!(s.is_empty());
+}
+
+#[test]
 fn add_unions_and_subtract_cuts() {
     let c = Size::new(6, 4);
     let mut s = Selection::from_polygon(c, &rect_poly(0.0, 0.0, 2.0, 2.0));
