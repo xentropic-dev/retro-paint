@@ -64,6 +64,7 @@ All shortcuts go to the editor window.
 | Ctrl+wheel | Zoom about the cursor |
 | Wheel | Scroll the canvas |
 | Space+drag, middle-drag | Pan |
+| `S` / `M` / `B` / `E` / `I` | Select / Move / Brush / Eraser / Picker tool |
 | `[` / `]` | Brush size down / up |
 | `X` | Swap foreground and background colors |
 | `D` | Reset colors to black on white |
@@ -75,9 +76,9 @@ All shortcuts go to the editor window.
 | Enter / D / Escape | Save / Don't Save / Cancel in the unsaved-changes prompt |
 | ←/→ or −/+, 1–8, F | Export dialog: scale down/up, set the scale, toggle the full-color file |
 
-`[`, `]`, `X` and `D` work only with no Ctrl or Alt held (`X` and `D` also not with Shift), and never while typing a layer name or inside a dialog. Undo and redo do nothing while a dialog is open.
+`[`, `]`, `X`, `D` and the tool letters work only with no Ctrl or Alt held (`X`, `D` and the tool letters also not with Shift), and never while typing a layer name or inside a dialog. Undo and redo do nothing while a dialog is open.
 
-Mouse: with Brush, the left button paints the foreground color and the right button the background color. With Picker, left sets the foreground and right the background. Click the foreground or background chip at the ribbon's right end to open the color picker for it; Swatches' **+ New color…** opens it to make a new swatch. In Swatches, click sets the foreground, right-click the background, middle-click removes the swatch. Double-click a layer to rename it.
+Mouse: with Brush, the left button paints the foreground color and the right button the background color. With Picker, left sets the foreground and right the background. Click the foreground or background chip at the ribbon's right end to open the color picker for it; Swatches' **+ New color…** opens it to make a new swatch. In Swatches, click sets the foreground, right-click the background, middle-click removes the swatch. Double-click a layer to rename it. The ribbon's buttons are icons; hover one to see its name and shortcut.
 
 ## Files
 

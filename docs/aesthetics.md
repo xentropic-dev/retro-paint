@@ -36,7 +36,7 @@ The editor and DOS view are always two separate OS windows. With one screen, the
 ## Full-color view (left)
 
 - File and Edit menus at the top. File: New (Ctrl+N), Open… (Ctrl+O), Insert Image… (Ctrl+I), Save (Ctrl+S), Save As… (Ctrl+Shift+S), Export PNG… (Ctrl+E), see [File Format](file-format.md); Project Settings… (Ctrl+Shift+P), see [Canvas, output, and screen resolutions](#canvas-output-and-screen-resolutions); Quit (Ctrl+Q). Edit: Undo (Ctrl+Z), Redo (Ctrl+Shift+Z or Ctrl+Y), see [Undo and redo](#undo-and-redo); Paste (Ctrl+V), see [Inserting images](#inserting-images); Duplicate Layer (Ctrl+J), Flip Horizontal, Flip Vertical, Rasterize Layer, see [Layers panel](#layers-panel).
-- Toolbar ribbon at the top.
+- Toolbar ribbon at the top, all icon buttons (the File/Edit menus stay words): the tools (Select, Lasso, Rect Select, Move, Brush, Eraser, Picker), Insert Image, the brush size −/+ around the size readout, the Hard/Soft tip toggle, then at the right end the fg/bg chips with swap and reset. Icons are 16×16 one-bit pixel art (a DOS-paint look) drawn as SVG and tinted with the theme's text color (white on the accent fill when selected, dimmed when a size step is at its limit); buttons are 28 px square. Hovering a button shows its name and shortcut, e.g. "Brush (B)". Tool keys, with no modifiers held and not while renaming a layer: `S` Select, `M` Move, `B` Brush, `E` Eraser, `I` Picker (`L` Lasso and `R` Rect Select come with the lasso-tool feature).
 - Full set of tools.
 - Layer selection panel, inspired by GIMP or Photoshop.
 - Reorder layers.
@@ -65,7 +65,7 @@ Top of the right-hand panel column. The list shows the top of the stack at the t
 
 ### Inserting images
 
-- **File > Insert Image…** (Ctrl+I), the ribbon's **Insert Image** button (right of the tools), the Layers panel's **Image** button, or dropping files from a file manager onto the canvas. The dialog is the desktop's file chooser (XDG portal) and allows several files; each becomes its own layer, in order.
+- **File > Insert Image…** (Ctrl+I), the ribbon's Insert Image icon button (picture with a plus, right of the tools), the Layers panel's **Image** button, or dropping files from a file manager onto the canvas. The dialog is the desktop's file chooser (XDG portal) and allows several files; each becomes its own layer, in order.
 - PNG, JPEG and WebP are read by content, not extension, as RGBA8 with straight alpha; the EXIF orientation is applied so the picture is upright. Decoding runs off the UI thread; the status bar shows `Loading <file>…`, then the result or why it failed (unreadable, unsupported format, corrupt, too large).
 - The new image layer goes directly above the selected layer, is named after the file stem, and becomes selected. It is centered on the canvas at 1:1 on whole pixels; an image larger than the canvas is scaled down uniformly to fit inside it, never up.
 - The source is kept at full resolution under its `rp_format::source_hash`; inserting the same picture again reuses the stored source.
@@ -84,7 +84,7 @@ Top of the right-hand panel column. The list shows the top of the stack at the t
 ### Painting
 
 - **Brush** paints the selected paint layer: the left button paints the foreground color, the right button the background color. **Eraser** lowers alpha with the same brush (either button). **Picker** sets the foreground (left) or background (right) to the flattened color under the cursor, as the canvas shows it; fully transparent pixels are not picked.
-- The default brush is a built-in round brush with a **Hard / Soft** toggle in the ribbon. Size is 1–256 canvas pixels: the ribbon's −/+ stepper or `[` / `]` step through 1–10, then by 5 to 50, by 10 to 100, by 25 to 250, then 256.
+- The default brush is a built-in round brush with a **Hard / Soft** toggle in the ribbon (a solid disc and a dithered disc). Size is 1–256 canvas pixels: the ribbon's −/+ icon buttons or `[` / `]` step through 1–10, then by 5 to 50, by 10 to 100, by 25 to 250, then 256.
 - Dabs are spaced along the pointer path at the brush's spacing, so fast strokes stay continuous. Strokes follow the layer's offset and are clipped to the layer.
 - Locked layers and image layers refuse strokes; the status bar says why (for an image layer it suggests Rasterize).
 - With the mask as the edit target, Brush and Eraser paint the selected layer's mask instead: Brush with the left button paints black (hides), Brush right button and Eraser (either button) paint white (reveal). Each dab moves the mask toward black or white by the brush's coverage, so the soft brush feathers. Masks are canvas-space, so strokes ignore the layer's offset or transform, and image layers' masks paint the same way (their pixels are never touched). A pixel lock does not lock the mask (as in Photoshop). The Picker ignores the target and always picks the flattened color.
@@ -92,7 +92,7 @@ Top of the right-hand panel column. The list shows the top of the stack at the t
 
 ### Colors and swatches
 
-- The ribbon's right end shows the foreground chip over the background chip. **⇄** next to them (or `X`) swaps them; **◩** (or `D`) resets to black foreground, white background, GIMP-style. `X` and `D` work with no modifiers held and not while renaming a layer.
+- The ribbon's right end shows the foreground chip over the background chip. the swap-arrows icon next to them (or `X`) swaps them; the small-chips icon (or `D`) resets to black foreground, white background, GIMP-style. `X` and `D` work with no modifiers held and not while renaming a layer.
 - The **Swatches** panel (bottom of the right column) is a grid of the document's saved full-color swatches, oldest first. Click a swatch to set the foreground, right-click to set the background, middle-click to remove it. The swatch equal to the foreground has a white ring.
 - **+ Add fg** saves the foreground at the end. A color that is already saved is not duplicated; it moves to the end. A document keeps at most 64 swatches; adding to a full list is refused with a status message (re-adding a saved color still moves it).
 - **− Remove fg** removes the swatch equal to the foreground (pick it first by clicking it); if none matches, the status bar says so.
