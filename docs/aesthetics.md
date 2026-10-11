@@ -96,8 +96,17 @@ Top of the right-hand panel column. The list shows the top of the stack at the t
 - The **Swatches** panel (bottom of the right column) is a grid of the document's saved full-color swatches, oldest first. Click a swatch to set the foreground, right-click to set the background, middle-click to remove it. The swatch equal to the foreground has a white ring.
 - **+ Add fg** saves the foreground at the end. A color that is already saved is not duplicated; it moves to the end. A document keeps at most 64 swatches; adding to a full list is refused with a status message (re-adding a saved color still moves it).
 - **− Remove fg** removes the swatch equal to the foreground (pick it first by clicking it); if none matches, the status bar says so.
-- The picker and the swatches are the ways to set a color in v1; there is no RGB/HSV color editor yet.
-- Colors and swatches are stored in the document (see [File Format](file-format.md)) but are not pixel edits: changing them never re-renders or re-dithers (`doc_version` does not move). A foreground change reaches the DOS view as an overlay update of its active color. Swatch add and remove are undo steps; fg/bg changes (picker, swatch click, swap, reset) are not, like GIMP.
+- **+ New color…** opens the color picker (below) to make a swatch; its OK (labelled **Add**) saves the picked color like **+ Add fg**, and the foreground is left alone.
+- **Color picker.** Clicking the foreground or background chip opens a popover under the ribbon for that color:
+  - A saturation/value square (saturation left → right, value bottom → top) and a vertical hue bar (red at the top, through yellow, green, cyan, blue, magenta, back to red). Click or drag either; a drag keeps going outside the control and clamps at its edges. HSV is over gamma-encoded sRGB. Picking a gray or black keeps the current hue (and black keeps the saturation), so the square does not jump.
+  - Typed fields: **Hex** (`#rrggbb`; 3-digit `#rgb` also works) and **R / G / B** (0–255, larger values clamp to 255), the same entry as Project Settings: click a field and type, Enter or Tab (or a click elsewhere in the picker) sets it, Escape drops the typing. Tab moves on to the next field (Hex → R → G → B → Hex). A hex that is not 3 or 6 digits, or an empty field, keeps the color.
+  - A row of the 16 CGA colors: one click picks one exactly.
+  - **Old / New** side by side; clicking Old goes back to it. A readout shows H°, S% and V%.
+  - **Dithers to**: the color a flat area of the picked color becomes in the current filter: the active pre-adjust, then the nearest color of the active dither palette (full 16, 4-color mode or custom subset), with no dither pattern.
+  - **Add to swatches** saves the picked color (an undo step; the picker stays open). **OK** (Enter) keeps the color, **Cancel** (Escape, or a click outside the popover) puts the old one back.
+  - The target color follows the picker **live** while it is open, so the ribbon chip and the DOS view's active color update as you drag (overlay only, no re-dither); Cancel restores the old color. A new swatch has no live target.
+  - The picker is modal: editor keys (`[` `]` `X` `D`, space), File and Edit commands, layer commands, paste, undo and redo do nothing while it is open.
+- Colors and swatches are stored in the document (see [File Format](file-format.md)) but are not pixel edits: changing them never re-renders or re-dithers (`doc_version` does not move). A foreground change reaches the DOS view as an overlay update of its active color. Swatch add and remove are undo steps; fg/bg changes (Picker tool, color picker, swatch click, swap, reset) are not, like GIMP.
 
 ### Undo and redo
 

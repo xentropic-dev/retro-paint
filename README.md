@@ -70,13 +70,14 @@ All shortcuts go to the editor window.
 | Arrows / Shift+arrows | Nudge the selected layer 1 px / 10 px (Move or Select tool) |
 | Shift while scaling | Scale freely instead of keeping the aspect ratio |
 | Shift while rotating | Snap to 15° steps |
-| Enter / Escape | Apply / cancel a layer rename, Project Settings or the Export dialog |
+| Enter / Escape | Apply / cancel a layer rename, Project Settings, the Export dialog or the color picker |
+| Tab | Color picker: next field (Hex → R → G → B) |
 | Enter / D / Escape | Save / Don't Save / Cancel in the unsaved-changes prompt |
 | ←/→ or −/+, 1–8, F | Export dialog: scale down/up, set the scale, toggle the full-color file |
 
 `[`, `]`, `X` and `D` work only with no Ctrl or Alt held (`X` and `D` also not with Shift), and never while typing a layer name or inside a dialog. Undo and redo do nothing while a dialog is open.
 
-Mouse: with Brush, the left button paints the foreground color and the right button the background color. With Picker, left sets the foreground and right the background. In Swatches, click sets the foreground, right-click the background, middle-click removes the swatch. Double-click a layer to rename it.
+Mouse: with Brush, the left button paints the foreground color and the right button the background color. With Picker, left sets the foreground and right the background. Click the foreground or background chip at the ribbon's right end to open the color picker for it; Swatches' **+ New color…** opens it to make a new swatch. In Swatches, click sets the foreground, right-click the background, middle-click removes the swatch. Double-click a layer to rename it.
 
 ## Files
 
