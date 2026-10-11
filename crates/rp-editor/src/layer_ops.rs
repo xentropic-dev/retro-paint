@@ -257,7 +257,7 @@ impl EditorState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{BACKGROUND_LAYER, FileCommand, NEW_CANVAS_SIZE};
+    use crate::state::{BACKGROUND_LAYER, NEW_CANVAS_SIZE};
 
     fn names(st: &EditorState) -> Vec<&str> {
         st.document
@@ -276,7 +276,7 @@ mod tests {
         let mut st = EditorState::new();
         assert_eq!(st.selected_layer, Some(bg(&st)));
         st.add_paint_layer();
-        st.dispatch(FileCommand::New);
+        st.new_document_now();
         assert_eq!(st.selected_layer, Some(bg(&st)));
         assert_eq!(st.selected().unwrap().name, BACKGROUND_LAYER);
     }

@@ -13,6 +13,9 @@
 
 pub mod canvas_image;
 mod canvas_view;
+mod file_dialog;
+mod file_flow;
+pub mod file_ops;
 pub mod filter_ops;
 mod filter_panel;
 pub mod image_ops;
@@ -51,7 +54,7 @@ pub fn run(sink: FrameSink) {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             app_id: Some(APP_ID.into()),
             titlebar: Some(TitlebarOptions {
-                title: Some("retro-paint editor".into()),
+                title: Some("Untitled — retro-paint".into()),
                 ..Default::default()
             }),
             ..Default::default()

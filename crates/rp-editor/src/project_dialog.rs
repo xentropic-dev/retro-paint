@@ -347,7 +347,7 @@ fn section(title: &'static str) -> Div {
 }
 
 /// A small button with a runtime label; `on` highlights it.
-fn chip(id: String, label: String, on: bool) -> Stateful<Div> {
+pub(crate) fn chip(id: String, label: String, on: bool) -> Stateful<Div> {
     div()
         .id(SharedString::from(id))
         .px_2()

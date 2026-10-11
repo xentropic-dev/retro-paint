@@ -11,15 +11,17 @@ use rp_doc::Tool;
 use rp_palette_dither::Rgb;
 
 use crate::canvas_view::{self, CanvasCache};
+use crate::file_dialog::FileDialog;
+use crate::file_flow::handle_outcome;
 use crate::filter_panel::FilterPanel;
-use crate::insert_flow::{insert_image_files, prompt_insert_image};
+use crate::insert_flow::insert_image_files;
 use crate::layers_panel::LayersPanel;
 use crate::paint_ops::{BrushTip, MAX_BRUSH_SIZE, MIN_BRUSH_SIZE, PaintButton};
 use crate::project_dialog::ProjectDialog;
 use crate::render_worker::{
     CanvasReceiver, Overlay, RenderJob, Request, TIMING_ENV, WorkerClient, next_request,
 };
-use crate::state::{EditorState, FileCommand, Outcome, ViewCommand, shortcut_label, tool_label};
+use crate::state::{EditorState, FileCommand, ViewCommand, shortcut_label, tool_label};
 use crate::swatch_ops::color_key;
 use crate::swatches_panel::SwatchesPanel;
 use crate::transform_ops::arrow_nudge;
@@ -114,6 +116,9 @@ pub(crate) struct EditorView {
     filter_panel: Entity<FilterPanel>,
     swatches_panel: Entity<SwatchesPanel>,
     project_dialog: Entity<ProjectDialog>,
+    file_dialog: Entity<FileDialog>,
+    /// Last title given to the window (file name, • while dirty).
+    title: String,
     focus: FocusHandle,
     worker: WorkerClient,
     /// What the render worker was last given: document version and overlay.
@@ -142,12 +147,28 @@ impl EditorView {
         let filter_panel = cx.new(|cx| FilterPanel::new(state.clone(), cx));
         let swatches_panel = cx.new(|cx| SwatchesPanel::new(state.clone(), cx));
         let project_dialog = cx.new(|cx| ProjectDialog::new(state.clone(), focus.clone(), cx));
+        let file_dialog = cx.new(|cx| FileDialog::new(state.clone(), focus.clone(), cx));
+        // The window's close button asks about unsaved changes like Quit.
+        let (close_state, close_dialog) = (state.clone(), file_dialog.clone());
+        window.on_window_should_close(cx, move |window, cx| {
+            let close = close_state.update(cx, |s, cx| {
+                cx.notify();
+                s.request_close()
+            });
+            if !close {
+                let focus = close_dialog.read(cx).focus_handle().clone();
+                window.focus(&focus, cx);
+            }
+            close
+        });
         let mut this = Self {
             state,
             layers_panel,
             filter_panel,
             swatches_panel,
             project_dialog,
+            file_dialog,
+            title: String::new(),
             focus,
             worker,
             sent: None,
@@ -217,12 +238,12 @@ impl EditorView {
     }
 
     fn run(&mut self, cmd: FileCommand, window: &mut Window, cx: &mut Context<Self>) {
-        match self.edit(cx, |s| s.dispatch(cmd)) {
-            Outcome::Quit => cx.quit(),
-            Outcome::PickImages => prompt_insert_image(&self.state, cx),
-            Outcome::Done | Outcome::NotImplemented(_) => {}
-        }
-        if self.state.read(cx).project_dialog.is_some() {
+        let out = self.edit(cx, |s| s.dispatch(cmd));
+        handle_outcome(&self.state, out, cx);
+        if self.state.read(cx).file_modal_open() {
+            let focus = self.file_dialog.read(cx).focus_handle().clone();
+            window.focus(&focus, cx);
+        } else if self.state.read(cx).project_dialog.is_some() {
             self.project_dialog.update(cx, |d, cx| d.focus(window, cx));
         } else if !self.focus.contains_focused(window, cx) {
             // New closes the dialog; take focus back from it.
@@ -230,7 +251,7 @@ impl EditorView {
         }
     }
 
-    // One handler per action; file-ops replaces the stubs behind them.
+    // One handler per action.
     fn on_new(&mut self, _: &NewFile, w: &mut Window, cx: &mut Context<Self>) {
         self.run(FileCommand::New, w, cx);
     }
@@ -696,6 +717,11 @@ impl EditorView {
             .border_color(rgb(BORDER))
             .text_xs()
             .text_color(rgb(TEXT_DIM))
+            .child(div().text_color(rgb(TEXT)).child(format!(
+                "{}{}",
+                state.file_name(),
+                if state.is_dirty() { " •" } else { "" }
+            )))
             .child(tool_label(state.tool))
             .child(format!(
                 "{}×{} → {}×{}",
@@ -786,9 +812,15 @@ pub(crate) fn panel_header(title: &'static str) -> Div {
 }
 
 impl Render for EditorView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let menu_open = self.state.read(cx).file_menu_open;
         let dialog_open = self.state.read(cx).project_dialog.is_some();
+        let file_modal = self.state.read(cx).file_modal_open();
+        let title = self.state.read(cx).window_title();
+        if title != self.title {
+            window.set_window_title(&title);
+            self.title = title;
+        }
         div()
             .id("editor")
             .track_focus(&self.focus)
@@ -864,6 +896,22 @@ impl Render for EditorView {
                         .bg(gpui::rgba(0x00000099))
                         .occlude()
                         .child(self.project_dialog.clone()),
+                )
+            })
+            .when(file_modal, |root| {
+                root.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .bottom_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .bg(gpui::rgba(0x00000099))
+                        .occlude()
+                        .child(self.file_dialog.clone()),
                 )
             })
     }

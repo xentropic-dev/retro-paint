@@ -1,13 +1,16 @@
 //! Editor state and File-menu command dispatch, with no GPUI types.
 //!
 //! The GPUI views share one [`EditorState`] entity and forward every menu click and
-//! key binding to [`EditorState::dispatch`]. Commands that the `file-ops`
-//! feature will implement return [`Outcome::NotImplemented`] for now.
+//! key binding to [`EditorState::dispatch`]. Save, Open, Export and the
+//! unsaved-changes prompt live in [`crate::file_ops`].
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use rp_doc::{Document, Layer, LayerId, LayerKind, RgbaImage, Size, SourceStore, Tool};
+use rp_format::ExportOptions;
 
+use crate::file_ops::{Alert, ExportDraft, PendingAction, SavedMark};
 use crate::filter_ops::PaletteMemory;
 use crate::layer_ops::RenameEdit;
 use crate::paint_ops::{BrushState, Stroke};
@@ -145,16 +148,22 @@ impl ViewCommand {
 }
 
 /// What the view must do after a command.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Outcome {
     /// State changed; redraw.
     Done,
     /// Quit the application.
     Quit,
-    /// Not wired yet (the `file-ops` feature implements it).
-    NotImplemented(FileCommand),
     /// Ask the user for image files to insert (Insert Image…).
     PickImages,
+    /// Ask for a project file to open.
+    PickOpenPath,
+    /// Ask for a path to save the project to (Save As…).
+    PickSavePath,
+    /// Save the project to this path, off the UI thread.
+    SaveTo(PathBuf),
+    /// Ask for the PNG export path (the Export dialog was confirmed).
+    PickExportPath,
 }
 
 /// Everything the editor knows, independent of GPUI.
@@ -205,6 +214,22 @@ pub struct EditorState {
     pub shift_held: bool,
     /// The Project Settings dialog's draft while it is open.
     pub project_dialog: Option<ProjectDraft>,
+    /// The project file the document was last saved to or opened from.
+    pub current_path: Option<PathBuf>,
+    /// The document as last saved or opened; see [`EditorState::is_dirty`].
+    pub saved: SavedMark,
+    /// The unsaved-changes prompt, and the command waiting behind it.
+    pub unsaved_prompt: Option<PendingAction>,
+    /// The command to run once the current save succeeds.
+    pub after_save: Option<PendingAction>,
+    /// The Export PNG dialog's settings while it is open.
+    pub export_dialog: Option<ExportDraft>,
+    /// Settings of the last export (the Export dialog starts from them).
+    pub last_export: ExportOptions,
+    /// A message box (open or save failure).
+    pub alert: Option<Alert>,
+    /// A save, open or export is running off the UI thread.
+    pub file_busy: bool,
 }
 
 impl Default for EditorState {
@@ -219,6 +244,12 @@ impl EditorState {
         let document = new_document();
         let s = document.canvas_size;
         let selected_layer = document.layers().last().map(Layer::id);
+        let saved = SavedMark {
+            doc_version: 0,
+            fg: document.fg,
+            bg: document.bg,
+            swatches: document.swatches.clone(),
+        };
         Self {
             document,
             tool: Tool::default(),
@@ -239,6 +270,14 @@ impl EditorState {
             transform_drag: None,
             shift_held: false,
             project_dialog: None,
+            current_path: None,
+            saved,
+            unsaved_prompt: None,
+            after_save: None,
+            export_dialog: None,
+            last_export: ExportOptions::default(),
+            alert: None,
+            file_busy: false,
         }
     }
 
@@ -348,26 +387,29 @@ impl EditorState {
     /// Runs a File-menu command. Always closes the File dropdown.
     pub fn dispatch(&mut self, cmd: FileCommand) -> Outcome {
         self.file_menu_open = false;
+        if self.file_modal_open() {
+            return Outcome::Done;
+        }
+        let file_job = !matches!(cmd, FileCommand::InsertImage | FileCommand::ProjectSettings);
+        if file_job && self.file_busy {
+            self.status = "Wait for the file operation to finish".into();
+            return Outcome::Done;
+        }
         match cmd {
-            FileCommand::New => {
-                self.set_document(new_document());
-                let s = self.document.canvas_size;
-                self.status = format!("New document {}×{}", s.width, s.height);
+            FileCommand::New => self.guard_unsaved(PendingAction::New),
+            FileCommand::Open => self.guard_unsaved(PendingAction::Open),
+            FileCommand::Quit => self.guard_unsaved(PendingAction::Quit),
+            FileCommand::Save => self.save_command(),
+            FileCommand::SaveAs => Outcome::PickSavePath,
+            FileCommand::ExportPng => {
+                self.open_export_dialog();
                 Outcome::Done
             }
             FileCommand::ProjectSettings => {
                 self.open_project_settings();
                 Outcome::Done
             }
-            FileCommand::Quit => Outcome::Quit,
             FileCommand::InsertImage => Outcome::PickImages,
-            FileCommand::Open
-            | FileCommand::Save
-            | FileCommand::SaveAs
-            | FileCommand::ExportPng => {
-                self.status = format!("{}: not implemented yet", cmd.label().trim_end_matches('…'));
-                Outcome::NotImplemented(cmd)
-            }
         }
     }
 
@@ -423,6 +465,12 @@ mod tests {
             .push(rp_palette_dither::Rgb::new(1, 2, 3));
         st.file_menu_open = true;
         assert_eq!(st.dispatch(FileCommand::New), Outcome::Done);
+        assert!(!st.file_menu_open);
+        // The edits are unsaved: New asks first.
+        assert_eq!(
+            st.resolve_unsaved(crate::file_ops::UnsavedChoice::DontSave),
+            Outcome::Done
+        );
         assert_eq!(st.document, new_document());
         assert!(!st.file_menu_open);
     }
@@ -452,26 +500,6 @@ mod tests {
     fn quit_returns_quit() {
         let mut st = EditorState::new();
         assert_eq!(st.dispatch(FileCommand::Quit), Outcome::Quit);
-    }
-
-    #[test]
-    fn file_ops_are_stubs_that_leave_document_alone() {
-        for cmd in [
-            FileCommand::Open,
-            FileCommand::Save,
-            FileCommand::SaveAs,
-            FileCommand::ExportPng,
-        ] {
-            let mut st = EditorState::new();
-            st.document
-                .push_layer(Layer::paint("Paint", NEW_CANVAS_SIZE));
-            let before = st.document.clone();
-            st.file_menu_open = true;
-            assert_eq!(st.dispatch(cmd), Outcome::NotImplemented(cmd));
-            assert_eq!(st.document, before);
-            assert!(!st.file_menu_open);
-            assert!(st.status.contains("not implemented"), "{}", st.status);
-        }
     }
 
     #[test]
@@ -540,11 +568,21 @@ mod tests {
     }
 
     #[test]
-    fn stubbed_commands_leave_doc_version_alone() {
-        let mut st = EditorState::new();
-        let v = st.doc_version;
-        st.dispatch(FileCommand::Save);
-        assert_eq!(st.doc_version, v);
+    fn file_commands_leave_document_alone_until_their_dialogs_finish() {
+        for cmd in [
+            FileCommand::Open,
+            FileCommand::Save,
+            FileCommand::SaveAs,
+            FileCommand::ExportPng,
+        ] {
+            let mut st = EditorState::new();
+            let (before, v) = (st.document.clone(), st.doc_version);
+            st.file_menu_open = true;
+            st.dispatch(cmd);
+            assert_eq!(st.document, before);
+            assert_eq!(st.doc_version, v);
+            assert!(!st.file_menu_open);
+        }
     }
 
     #[test]

@@ -696,7 +696,7 @@ mod tests {
         st.set_palette_mode(PaletteMode::FourColor);
         st.set_four_color_preset(Preset::Palette0);
         st.set_palette_mode(PaletteMode::Full);
-        st.dispatch(crate::state::FileCommand::New);
+        st.new_document_now();
         st.set_palette_mode(PaletteMode::FourColor);
         assert_eq!(st.four_color(), Some(DEFAULT_FOUR_COLOR));
     }
