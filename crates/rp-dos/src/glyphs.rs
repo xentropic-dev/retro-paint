@@ -64,7 +64,40 @@ pub const ICON_SIZE: i32 = 12;
 /// A 12×12 bitmap: `#` is ink, anything else is transparent.
 pub type Icon = [&'static str; 12];
 
+/// Select (layers): a pointer arrow.
 pub const ICON_SELECT: Icon = [
+    "..#.........",
+    "..##........",
+    "..###.......",
+    "..####......",
+    "..#####.....",
+    "..######....",
+    "..#######...",
+    "..########..",
+    "..#####.....",
+    "..##.###....",
+    "..#...##....",
+    "......##....",
+];
+
+/// Lasso: a freehand loop with its rope trailing down, Deluxe Paint style.
+pub const ICON_LASSO: Icon = [
+    "...#####....",
+    ".##.....##..",
+    "#.........#.",
+    "#..........#",
+    "#..........#",
+    ".#........#.",
+    "..##....##..",
+    "....####....",
+    "....#.......",
+    "...#........",
+    "...#........",
+    "....##......",
+];
+
+/// Rectangle select: a dotted (marching-ants) rectangle.
+pub const ICON_RECT_SELECT: Icon = [
     "............",
     ".##..##..##.",
     ".#........#.",
@@ -238,9 +271,11 @@ pub const ARROW: [&str; 16] = [
 mod tests {
     use super::*;
 
-    fn all_icons() -> [Icon; 10] {
+    fn all_icons() -> [Icon; 12] {
         [
             ICON_SELECT,
+            ICON_LASSO,
+            ICON_RECT_SELECT,
             ICON_MOVE,
             ICON_BRUSH,
             ICON_ERASER,
@@ -258,6 +293,16 @@ mod tests {
         for icon in all_icons() {
             for row in icon {
                 assert_eq!(row.len(), ICON_SIZE as usize, "{row:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn icons_are_distinct() {
+        let icons = all_icons();
+        for (i, a) in icons.iter().enumerate() {
+            for b in &icons[i + 1..] {
+                assert_ne!(a, b);
             }
         }
     }

@@ -155,6 +155,78 @@ fn golden_desktop_eraser_four_color() {
     assert_golden("desktop_eraser_4color", &compose_fresh(&f));
 }
 
+#[test]
+fn golden_mobile_lasso() {
+    let mut f = sample::sample_frame(Layout::Mobile);
+    f.tool = Tool::Lasso;
+    f.cursor = Some(OutputPoint { x: 90, y: 140 });
+    f.active_color = CgaColor::LightMagenta;
+    assert_golden("mobile_lasso", &compose_fresh(&f));
+}
+
+#[test]
+fn golden_desktop_rect_select() {
+    let mut f = sample::sample_frame(Layout::Desktop);
+    f.tool = Tool::RectSelect;
+    f.cursor = Some(OutputPoint { x: 100, y: 60 });
+    f.active_color = CgaColor::LightGreen;
+    assert_golden("desktop_rect_select", &compose_fresh(&f));
+}
+
+/// Every editor tool has its own tool strip highlight: above the status bar
+/// (which names the tool), no two tools compose the same screen.
+#[test]
+fn every_tool_has_its_own_highlight() {
+    for layout in [Layout::Mobile, Layout::Desktop] {
+        let mut f = sample::sample_frame(layout);
+        f.cursor = None;
+        let screen = layout.dos_screen();
+        let above_status = (screen.width * (screen.height - 9)) as usize;
+        let screens: Vec<_> = Tool::ALL
+            .iter()
+            .map(|&t| {
+                f.tool = t;
+                compose_fresh(&f).pixels()[..above_status].to_vec()
+            })
+            .collect();
+        for (i, a) in screens.iter().enumerate() {
+            for (j, b) in screens.iter().enumerate().skip(i + 1) {
+                assert_ne!(a, b, "{layout:?} {:?} vs {:?}", Tool::ALL[i], Tool::ALL[j]);
+            }
+        }
+    }
+}
+
+/// Selection tools draw the crosshair, not the arrow: the pixel left of the
+/// hotspot changes (the arrow never draws left of its hotspot).
+#[test]
+fn selection_tools_use_the_crosshair() {
+    for layout in [Layout::Mobile, Layout::Desktop] {
+        for tool in [Tool::Lasso, Tool::RectSelect] {
+            let mut f = sample::sample_frame(layout);
+            f.tool = tool;
+            let c = OutputPoint { x: 50, y: 50 };
+            f.cursor = Some(c);
+            let mut scroll = ScrollState::default();
+            let with = compose(&f, layout, &mut scroll);
+            let mut none = f.clone();
+            none.cursor = None;
+            let without = compose(&none, layout, &mut scroll.clone());
+            let (sx, sy) = cursor_screen_pos(layout, f.image.size, scroll, c);
+            assert_ne!(
+                with.get(sx - 3, sy),
+                without.get(sx - 3, sy),
+                "{layout:?} {tool:?}"
+            );
+            assert_ne!(
+                with.get(sx, sy - 3),
+                without.get(sx, sy - 3),
+                "{layout:?} {tool:?}"
+            );
+        }
+    }
+}
+
 // ---- properties ----
 
 #[test]

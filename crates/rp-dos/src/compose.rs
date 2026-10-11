@@ -15,7 +15,7 @@
 //! Desktop puts the tools and palette in a column on the right, Deluxe Paint
 //! style, and merges the title into the menu bar.
 //!
-//! The tool strip shows the five editor tools followed by five decorative
+//! The tool strip shows the seven editor tools followed by five decorative
 //! ones (fill, line, rectangle, ellipse, text) that never highlight; they
 //! make the strip read as a real paint program's toolbox.
 
@@ -28,8 +28,10 @@ use crate::scroll::ScrollState;
 
 /// Tool strip entries in order: the editor tool each icon mirrors (`None` for
 /// decorative icons) and its icon.
-const TOOL_STRIP: [(Option<Tool>, Icon); 10] = [
+const TOOL_STRIP: [(Option<Tool>, Icon); 12] = [
     (Some(Tool::Select), glyphs::ICON_SELECT),
+    (Some(Tool::Lasso), glyphs::ICON_LASSO),
+    (Some(Tool::RectSelect), glyphs::ICON_RECT_SELECT),
     (Some(Tool::Move), glyphs::ICON_MOVE),
     (Some(Tool::Brush), glyphs::ICON_BRUSH),
     (Some(Tool::Eraser), glyphs::ICON_ERASER),
@@ -76,9 +78,9 @@ impl ScreenLayout {
                 menu: Rect::new(0, 9, 200, 9),
                 canvas_window: Rect::new(0, 18, 200, 244),
                 panel: Rect::new(0, 262, 200, 49),
-                tools_origin: (5, 265),
-                tool_cell: (19, 16),
-                tool_cols: 10,
+                tools_origin: (4, 265),
+                tool_cell: (16, 16),
+                tool_cols: 12,
                 current_color: Rect::new(5, 284, 24, 24),
                 swatches: Rect::new(35, 284, 160, 24),
                 horizontal_palette: true,
@@ -91,10 +93,10 @@ impl ScreenLayout {
                 canvas_window: Rect::new(0, 9, 278, 182),
                 panel: Rect::new(278, 9, 42, 182),
                 tools_origin: (281, 12),
-                tool_cell: (18, 16),
+                tool_cell: (18, 15),
                 tool_cols: 2,
-                current_color: Rect::new(281, 96, 36, 14),
-                swatches: Rect::new(281, 114, 36, 72),
+                current_color: Rect::new(281, 104, 36, 12),
+                swatches: Rect::new(281, 119, 36, 68),
                 horizontal_palette: false,
                 status: Rect::new(0, 191, 320, 9),
             },
@@ -501,6 +503,29 @@ mod tests {
                     assert!(r.w >= 5 && r.h >= 5, "{layout:?} n={n} {r:?}");
                 }
             }
+        }
+    }
+
+    #[test]
+    fn strip_has_every_tool_once_and_cells_clear_the_color_wells() {
+        for tool in Tool::ALL {
+            let n = TOOL_STRIP.iter().filter(|(t, _)| *t == Some(tool)).count();
+            assert_eq!(n, 1, "{tool:?}");
+        }
+        for layout in [Layout::Mobile, Layout::Desktop] {
+            let l = ScreenLayout::for_layout(layout);
+            let overlaps = |a: Rect, b: Rect| {
+                a.x < b.right() && b.x < a.right() && a.y < b.bottom() && b.y < a.bottom()
+            };
+            for i in 0..TOOL_STRIP.len() {
+                let r = l.tool_rect(i);
+                assert!(r.w >= glyphs::ICON_SIZE + 2 && r.h >= glyphs::ICON_SIZE + 2);
+                assert!(!overlaps(r, l.current_color) && !overlaps(r, l.swatches));
+                for j in i + 1..TOOL_STRIP.len() {
+                    assert!(!overlaps(r, l.tool_rect(j)), "{layout:?} {i} {j}");
+                }
+            }
+            assert!(!overlaps(l.current_color, l.swatches), "{layout:?}");
         }
     }
 

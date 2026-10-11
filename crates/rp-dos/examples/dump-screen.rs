@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! cargo run -p rp-dos --example dump-screen -- --layout mobile|desktop --out <path>
-//!     [--scale N] [--tool select|move|brush|eraser|picker]
+//!     [--scale N] [--tool select|lasso|rect-select|move|brush|eraser|picker]
 //! ```
 //!
 //! `--scale` upscales with nearest-neighbor (default 1: the raw screen).
@@ -23,7 +23,7 @@ struct Args {
 }
 
 const USAGE: &str = "usage: dump-screen --layout mobile|desktop --out <path> [--scale N] \
-                     [--tool select|move|brush|eraser|picker]";
+                     [--tool select|lasso|rect-select|move|brush|eraser|picker]";
 
 fn parse() -> Result<Args, String> {
     let mut layout = Layout::Mobile;
@@ -52,6 +52,8 @@ fn parse() -> Result<Args, String> {
             "--tool" => {
                 tool = Some(match value()?.as_str() {
                     "select" => Tool::Select,
+                    "lasso" => Tool::Lasso,
+                    "rect-select" => Tool::RectSelect,
                     "move" => Tool::Move,
                     "brush" => Tool::Brush,
                     "eraser" => Tool::Eraser,
