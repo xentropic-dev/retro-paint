@@ -8,16 +8,48 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use rp_doc::{FrameMsg, IndexedFrame, Layout, Size, Tool};
 use rp_palette_dither::{CgaColor, Palette};
 
-use crate::{IndexedScreen, ScrollState, canvas_viewport, compose};
+use crate::{IndexedScreen, Rect, ScrollState, canvas_viewport, compose, tube_rect};
 
 /// Default DOS window size in pixels for `layout`: 9:16 for mobile, 16:9
-/// for desktop. A tiling compositor may override it; see
-/// `contrib/hyprland.conf` for window rules.
+/// for desktop. Only a request: the compositor may override it (see
+/// `contrib/hyprland.conf` for window rules), and the tube is fit to the
+/// real size with [`frame_tube`].
 pub const fn window_size(layout: Layout) -> (i32, i32) {
     match layout {
         Layout::Mobile => (540, 960),
         Layout::Desktop => (960, 540),
     }
+}
+
+/// The window system the DOS window runs on, as far as sizing goes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum WindowSystem {
+    /// Wayland: the compositor owns the window size. A client resize only
+    /// resizes our buffer; Hyprland keeps the window box (tiled, rule-sized,
+    /// and plain floating windows alike), so the buffer ends up cropped or
+    /// drawn in the corner of a larger window.
+    Wayland,
+    /// X11 and others: a resize is a request; the real size comes back as
+    /// a framebuffer resize event if the window manager grants it.
+    Other,
+}
+
+/// The window size to request when the layout switches, if any. On Wayland
+/// nothing is requested: the window keeps the size the compositor gave it
+/// and the tube is refit into it (see [`frame_tube`]).
+pub const fn layout_switch_size(system: WindowSystem, layout: Layout) -> Option<(i32, i32)> {
+    match system {
+        WindowSystem::Wayland => None,
+        WindowSystem::Other => Some(window_size(layout)),
+    }
+}
+
+/// Where to draw the tube this frame. `render` is the real framebuffer size
+/// (raylib's render size, which tracks framebuffer resize events), never the
+/// requested window size. Without raylib's HiDPI flag the framebuffer is
+/// unscaled, so it is also the drawing coordinate space.
+pub fn frame_tube(render: (i32, i32), layout: Layout) -> Rect {
+    tube_rect(render, layout)
 }
 
 /// What the window shows before the editor's first frame: an empty (black)
@@ -130,6 +162,47 @@ mod tests {
         assert_eq!(w * 16, h * 9);
         let (w, h) = window_size(Layout::Desktop);
         assert_eq!(w * 9, h * 16);
+    }
+
+    #[test]
+    fn wayland_never_requests_a_size_on_layout_switch() {
+        for layout in [Layout::Mobile, Layout::Desktop] {
+            assert_eq!(layout_switch_size(WindowSystem::Wayland, layout), None);
+            assert_eq!(
+                layout_switch_size(WindowSystem::Other, layout),
+                Some(window_size(layout))
+            );
+        }
+    }
+
+    #[test]
+    fn tube_follows_the_real_framebuffer_across_switch_and_resize() {
+        // A Hyprland tile that ignores the requested 540x960 / 960x540.
+        let tile = (1060, 1874);
+        assert_eq!(
+            frame_tube(tile, Layout::Mobile),
+            Rect::new(0, 0, 1060, 1874)
+        );
+        // After switching to desktop the window keeps its tile size: the
+        // tube is the largest 4:3 rect, centered, not 960x540 in a corner.
+        assert_eq!(
+            frame_tube(tile, Layout::Desktop),
+            Rect::new(0, 539, 1060, 795)
+        );
+        // The user resizes the window: the tube follows.
+        let resized = (944, 1034);
+        assert_eq!(
+            frame_tube(resized, Layout::Desktop),
+            Rect::new(0, 163, 944, 708)
+        );
+        assert_eq!(
+            frame_tube((900, 450), Layout::Desktop),
+            Rect::new(150, 0, 600, 450)
+        );
+        assert_eq!(
+            frame_tube(resized, Layout::Mobile),
+            Rect::new(0, 0, 944, 1034)
+        );
     }
 
     #[test]

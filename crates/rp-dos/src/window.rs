@@ -7,8 +7,11 @@ use raylib::prelude::*;
 
 use rp_doc::{FrameMsg, Layout};
 
-use crate::crt::{CRT_FS, CrtParams, tube_rect};
-use crate::view::{Change, DosState, StopSignal, idle_frame, window_size};
+use crate::crt::{CRT_FS, CrtParams};
+use crate::view::{
+    Change, DosState, StopSignal, WindowSystem, frame_tube, idle_frame, layout_switch_size,
+    window_size,
+};
 use crate::{FrameReceiver, IndexedScreen, sample};
 
 /// Opens the DOS window on the calling thread and draws the newest frame
@@ -67,6 +70,7 @@ fn run(initial: FrameMsg, rx: Option<&FrameReceiver>, stop: &StopSignal) {
     rl.set_target_fps(60);
     // The DOS window takes no input: Escape must not close it.
     rl.set_exit_key(None);
+    let system = window_system();
 
     let params = CrtParams::default();
     let mut shader = rl.load_shader_from_memory(&thread, None, Some(CRT_FS));
@@ -97,8 +101,9 @@ fn run(initial: FrameMsg, rx: Option<&FrameReceiver>, stop: &StopSignal) {
             Change::None => {}
             Change::Screen => upload(&mut texture, state.screen(), &mut rgba),
             Change::Layout => {
-                let (w, h) = window_size(state.layout());
-                rl.set_window_size(w, h);
+                if let Some((w, h)) = layout_switch_size(system, state.layout()) {
+                    rl.set_window_size(w, h);
+                }
                 texture = screen_texture(&mut rl, &thread, state.screen());
                 upload(&mut texture, state.screen(), &mut rgba);
                 size = state.screen().size();
@@ -106,8 +111,10 @@ fn run(initial: FrameMsg, rx: Option<&FrameReceiver>, stop: &StopSignal) {
             }
         }
         shader.set_shader_value(time, rl.get_time() as f32);
-        let tube = tube_rect(
-            (rl.get_screen_width(), rl.get_screen_height()),
+        // The real framebuffer, not get_screen_width/height: those return
+        // the last requested size even when the compositor kept its own.
+        let tube = frame_tube(
+            (rl.get_render_width(), rl.get_render_height()),
             state.layout(),
         );
         let mut d = rl.begin_drawing(&thread);
@@ -124,6 +131,18 @@ fn run(initial: FrameMsg, rx: Option<&FrameReceiver>, stop: &StopSignal) {
     }
 }
 
+/// Which window system GLFW picked. Call after the window exists.
+fn window_system() -> WindowSystem {
+    const GLFW_PLATFORM_WAYLAND: c_int = 0x0006_0003;
+    // SAFETY: GLFW is initialized (the window is open) and this runs on the
+    // thread that initialized it.
+    if unsafe { glfwGetPlatform() } == GLFW_PLATFORM_WAYLAND {
+        WindowSystem::Wayland
+    } else {
+        WindowSystem::Other
+    }
+}
+
 // raylib's InitWindow calls glfwDefaultWindowHints() right before creating the
 // window, which clears any app_id hint we could set beforehand. The binary links
 // with `--wrap=glfwDefaultWindowHints` (see build.rs) so this wrapper re-applies
@@ -133,6 +152,7 @@ const GLFW_X11_INSTANCE_NAME: c_int = 0x0002_4002;
 const GLFW_WAYLAND_APP_ID: c_int = 0x0002_6001;
 
 unsafe extern "C" {
+    fn glfwGetPlatform() -> c_int;
     fn __real_glfwDefaultWindowHints();
     fn glfwWindowHintString(hint: c_int, value: *const c_char);
 }

@@ -23,7 +23,10 @@ pub use compose::{canvas_viewport, compose};
 pub use crt::{CrtParams, tube_rect};
 pub use screen::{IndexedScreen, Rect};
 pub use scroll::{SCROLL_MARGIN, ScrollState};
-pub use view::{Change, DosState, StopSignal, idle_frame, window_size};
+pub use view::{
+    Change, DosState, StopSignal, WindowSystem, frame_tube, idle_frame, layout_switch_size,
+    window_size,
+};
 pub use window::{run_crt_demo, run_window};
 
 /// Wayland app_id (and X11 class) of the DOS window.
