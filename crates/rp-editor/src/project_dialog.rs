@@ -282,17 +282,12 @@ impl Render for ProjectDialog {
         let doc = &self.state.read(cx).document;
         let resizing = draft.settings.canvas != doc.canvas_size;
         let changed = draft.settings.differs_from(doc);
-        let note = if resizing {
-            "Layers are cropped or padded around the anchor; pixels are never resampled."
-        } else {
-            ""
-        };
         let footer = div()
             .flex()
             .flex_row()
             .items_center()
             .gap_2()
-            .child(div().flex_1().text_color(rgb(TEXT_DIM)).child(note))
+            .child(div().flex_1())
             .child(
                 chip("project-cancel".into(), "Cancel".into(), false)
                     .on_click(cx.listener(|this, _, window, cx| this.close(window, cx, false))),
@@ -331,6 +326,12 @@ impl Render for ProjectDialog {
                     .child(self.layout_section(&draft, cx))
                     .child(self.canvas_section(&draft, cx))
                     .child(self.output_section(&draft, cx))
+                    .when(resizing, |d| {
+                        d.child(div().text_color(rgb(TEXT_DIM)).child(
+                            "Layers are cropped or padded around the anchor; \
+                             pixels are never resampled.",
+                        ))
+                    })
                     .child(footer),
             )
             .into_any_element()
