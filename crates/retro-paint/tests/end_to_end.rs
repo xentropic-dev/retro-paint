@@ -179,7 +179,9 @@ fn decode_png(path: &Path) -> (Size, Vec<u8>) {
     let rgba = match out.color_type {
         png::ColorType::Rgba => buf,
         png::ColorType::Rgb => buf
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .flat_map(|p| [p[0], p[1], p[2], 255])
             .collect(),
         other => panic!("unexpected PNG color type {other:?}"),

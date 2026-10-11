@@ -7,6 +7,14 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 
+# Dev builds optimize third-party crates (GPUI, raylib, image codecs, zip,
+# ...) so debug builds start and paint at a usable speed, and keep only line
+# tables for them so test binaries link faster. Workspace crates stay at
+# opt-level 0 with full debug info and rebuild as quickly as before.
+[profile.dev.package."*"]
+opt-level = 2
+debug = "line-tables-only"
+
 [workspace.dependencies]
 rp-palette-dither = { path = "crates/rp-palette-dither" }
 rp-doc = { path = "crates/rp-doc" }
