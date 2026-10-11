@@ -36,4 +36,4 @@ pub use layer::{
 };
 pub use raster::{BufferSizeError, GrayImage, RgbaImage, Size};
 pub use rp_palette_dither::{DitherSettings, PaletteChoice};
-pub use selection::{Float, SelectMode, Selection};
+pub use selection::{Float, SelectMode, Selection, erase_selected};

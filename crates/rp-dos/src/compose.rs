@@ -355,6 +355,7 @@ fn tool_label(frame: &FrameMsg) -> String {
     let name = match frame.tool {
         Tool::Select => "SELECT",
         Tool::Lasso => "LASSO",
+        Tool::RectSelect => "RECT SELECT",
         Tool::Move => "MOVE",
         Tool::Brush => "BRUSH",
         Tool::Eraser => "ERASER",

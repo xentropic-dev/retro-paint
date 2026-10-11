@@ -16,6 +16,8 @@ pub enum Tool {
     Select,
     /// Lasso selection (freehand or polygon). DOS cursor: crosshair.
     Lasso,
+    /// Rectangle selection. DOS cursor: crosshair.
+    RectSelect,
     /// Move or transform a layer. DOS cursor: arrow.
     Move,
     /// Paint with the current brush. DOS cursor: crosshair or brush outline.
@@ -29,9 +31,10 @@ pub enum Tool {
 
 impl Tool {
     /// Every tool, in tool-strip order.
-    pub const ALL: [Tool; 6] = [
+    pub const ALL: [Tool; 7] = [
         Tool::Select,
         Tool::Lasso,
+        Tool::RectSelect,
         Tool::Move,
         Tool::Brush,
         Tool::Eraser,
@@ -137,6 +140,7 @@ mod tests {
         assert!(!Tool::Eraser.uses_arrow_cursor());
         assert!(!Tool::Picker.uses_arrow_cursor());
         assert!(!Tool::Lasso.uses_arrow_cursor());
+        assert!(!Tool::RectSelect.uses_arrow_cursor());
     }
 
     #[test]

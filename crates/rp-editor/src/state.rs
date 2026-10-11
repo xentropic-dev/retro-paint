@@ -114,6 +114,7 @@ pub const fn tool_label(tool: Tool) -> &'static str {
     match tool {
         Tool::Select => "Select",
         Tool::Lasso => "Lasso",
+        Tool::RectSelect => "Rect Select",
         Tool::Move => "Move",
         Tool::Brush => "Brush",
         Tool::Eraser => "Eraser",

@@ -10,7 +10,9 @@
 //! # Decisions
 //!
 //! - **Polygons are the only shape.** A freehand lasso is its point list, a
-//!   polygonal lasso its clicked vertices, a rectangle four corners. Points
+//!   polygonal lasso its clicked vertices, a rectangle four corners
+//!   ([`Selection::from_rect`] / [`Selection::combine_rect`] take a
+//!   pixel-aligned [`Rect`], so its edges are hard). Points
 //!   are canvas coordinates (`f32`, pixel `(x, y)` covers
 //!   `[x, x+1) × [y, y+1)`); the path closes itself from the last point to
 //!   the first. Fewer than three points, or any non-finite coordinate,
@@ -54,6 +56,10 @@
 //!   75 %, not 100 %), so committing at [`Float::home_transform`] restores
 //!   the original bytes exactly, like [`Float::cancel`]. Moved floats
 //!   composite normally.
+//! - **Erase leaves the lift's hole.** [`erase_selected`] applies the same
+//!   per-pixel split as a lift and discards the piece; it touches only the
+//!   selection bounds clipped to the layer and returns them as the history
+//!   hint.
 //! - **Cancel restores exactly.** The float keeps the lifted rectangle's
 //!   original pixels (only that rectangle) and writes them back.
 //! - **Previewing a float.** During a transform the hole is in the layer and
@@ -68,7 +74,11 @@
 //!
 //! ```text
 //! lasso drag end:  selection.combine_polygon(mode, &points)   // Shift: Add, Alt: Subtract
+//! rect drag end:   selection.combine_rect(mode, rect)
 //! Ctrl+A / Ctrl+D: selection.select_all() / selection.clear()
+//! Delete:          history.begin_paint(&doc, layer_id);
+//!                  let hint = erase_selected(doc.layer_mut(layer_id)?, &selection)?;
+//!                  history.commit_within(&doc, hint)
 //! transform start: history.begin_paint(&doc, layer_id);
 //!                  float = Float::lift(doc.layer_mut(layer_id)?, &selection)?
 //! handle drag:     float.set_transform(t)                     // corners() for handles
@@ -132,6 +142,20 @@ impl Selection {
         let mut s = Self::new(canvas);
         s.combine_polygon(SelectMode::Replace, points);
         s
+    }
+
+    /// The pixel-aligned rectangle `rect` selected (hard edges, clipped to
+    /// the canvas).
+    pub fn from_rect(canvas: Size, rect: Rect) -> Self {
+        let mut s = Self::new(canvas);
+        s.combine_rect(SelectMode::Replace, rect);
+        s
+    }
+
+    /// Combines the pixel-aligned rectangle `rect` with the selection, as
+    /// the four-corner polygon.
+    pub fn combine_rect(&mut self, mode: SelectMode, rect: Rect) {
+        self.combine_polygon(mode, &rect_polygon(rect));
     }
 
     /// Canvas size.
@@ -214,6 +238,13 @@ impl Selection {
             }
         }
     }
+}
+
+/// The corners of `rect` as a polygon; empty rects give a degenerate one.
+fn rect_polygon(r: Rect) -> [[f32; 2]; 4] {
+    let (x0, y0) = (r.x as f32, r.y as f32);
+    let (x1, y1) = (x0 + r.width as f32, y0 + r.height as f32);
+    [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
 }
 
 fn fill_rect(img: &mut GrayImage, r: Rect, v: u8) {
@@ -369,6 +400,102 @@ fn add_span(counts: &mut [u8], s0: usize, s1: usize) {
     counts[p1] += (s1 - p1 * SUB) as u8;
 }
 
+/// Clears the selected pixels of a paint layer by coverage, leaving exactly
+/// the hole [`Float::lift`] would leave (fully covered pixels go
+/// transparent, soft edges keep `a - round(a*c/255)` alpha). Works in the
+/// layer's own coordinates and touches only the selection bounds clipped to
+/// the raster, which it returns (layer coordinates, the hint for
+/// [`History::commit_within`](crate::History::commit_within)); `Ok(None)`
+/// if the selection misses the layer. Refused if the layer's pixels are
+/// locked or it is not a paint layer.
+pub fn erase_selected(layer: &mut Layer, selection: &Selection) -> Result<Option<Rect>, EditError> {
+    let Some((rect, ox, oy)) = overlap(layer, selection)? else {
+        return Ok(None);
+    };
+    split_rows(layer.pixels_mut()?, selection, rect, (ox, oy), None);
+    Ok(Some(rect))
+}
+
+/// The selection bounds in `layer`'s raster coordinates, clipped to the
+/// raster, with the layer offset. Checks that the pixels are editable.
+fn overlap(
+    layer: &mut Layer,
+    selection: &Selection,
+) -> Result<Option<(Rect, i64, i64)>, EditError> {
+    let (ox, oy) = match &layer.kind {
+        LayerKind::Paint(p) => (p.offset_x as i64, p.offset_y as i64),
+        LayerKind::Image(_) => (0, 0),
+    };
+    let pixels = layer.pixels_mut()?;
+    let Some(b) = selection.bounds() else {
+        return Ok(None);
+    };
+    let lx0 = (b.x as i64 - ox).max(0);
+    let ly0 = (b.y as i64 - oy).max(0);
+    let lx1 = (b.x as i64 + b.width as i64 - ox).min(pixels.width() as i64);
+    let ly1 = (b.y as i64 + b.height as i64 - oy).min(pixels.height() as i64);
+    if lx0 >= lx1 || ly0 >= ly1 {
+        return Ok(None);
+    }
+    let rect = Rect::new(
+        lx0 as u32,
+        ly0 as u32,
+        (lx1 - lx0) as u32,
+        (ly1 - ly0) as u32,
+    );
+    Ok(Some((rect, ox, oy)))
+}
+
+/// Splits each pixel of `rect` (layer coordinates) by selection coverage:
+/// the layer keeps the uncovered part. With `out`, the covered part goes to
+/// the rect-sized piece buffer and the pre-split rows are appended to the
+/// original buffer.
+fn split_rows(
+    pixels: &mut RgbaImage,
+    selection: &Selection,
+    rect: Rect,
+    (ox, oy): (i64, i64),
+    mut out: Option<(&mut [u8], &mut Vec<u8>)>,
+) {
+    let (rw, rh) = (rect.width as usize, rect.height as usize);
+    let lw = pixels.width() as usize;
+    let cov = selection.coverage();
+    let cw = cov.size().width as usize;
+    let cov = cov.as_raw();
+    let data = pixels.as_raw_mut();
+    let cx = (rect.x as i64 + ox) as usize;
+    for r in 0..rh {
+        let ly = rect.y as usize + r;
+        let row = &mut data[(ly * lw + rect.x as usize) * 4..][..rw * 4];
+        let cy = (ly as i64 + oy) as usize;
+        let cov_row = &cov[cy * cw + cx..][..rw];
+        let mut piece_row = None;
+        if let Some((piece, original)) = &mut out {
+            original.extend_from_slice(row);
+            piece_row = Some(&mut piece[r * rw * 4..][..rw * 4]);
+        }
+        let row = row.as_chunks_mut::<4>().0;
+        for (i, (px, &c)) in row.iter_mut().zip(cov_row).enumerate() {
+            if c == 0 || px[3] == 0 {
+                continue;
+            }
+            let lifted = ((px[3] as u32 * c as u32 + 127) / 255) as u8;
+            if lifted == 0 {
+                continue;
+            }
+            if let Some(p) = &mut piece_row {
+                p[i * 4..i * 4 + 4].copy_from_slice(&[px[0], px[1], px[2], lifted]);
+            }
+            let kept = px[3] - lifted;
+            *px = if kept == 0 {
+                [0; 4]
+            } else {
+                [px[0], px[1], px[2], kept]
+            };
+        }
+    }
+}
+
 /// Selected pixels lifted out of one paint layer, placed by a transform
 /// until committed back or cancelled. See the [module docs](self).
 #[derive(Clone, PartialEq, Debug)]
@@ -391,68 +518,20 @@ impl Float {
     /// are locked or it is not a paint layer.
     pub fn lift(layer: &mut Layer, selection: &Selection) -> Result<Option<Float>, EditError> {
         let id = layer.id();
-        let (ox, oy) = match &layer.kind {
-            LayerKind::Paint(p) => (p.offset_x as i64, p.offset_y as i64),
-            LayerKind::Image(_) => (0, 0),
-        };
-        let pixels = layer.pixels_mut()?;
-        let Some(b) = selection.bounds() else {
+        let Some((rect, ox, oy)) = overlap(layer, selection)? else {
             return Ok(None);
         };
-        // Selection bounds in layer coordinates, clipped to the raster.
-        let lx0 = (b.x as i64 - ox).max(0);
-        let ly0 = (b.y as i64 - oy).max(0);
-        let lx1 = (b.x as i64 + b.width as i64 - ox).min(pixels.width() as i64);
-        let ly1 = (b.y as i64 + b.height as i64 - oy).min(pixels.height() as i64);
-        if lx0 >= lx1 || ly0 >= ly1 {
-            return Ok(None);
-        }
-        let rect = Rect::new(
-            lx0 as u32,
-            ly0 as u32,
-            (lx1 - lx0) as u32,
-            (ly1 - ly0) as u32,
-        );
         let (rw, rh) = (rect.width as usize, rect.height as usize);
         let mut piece = vec![0u8; rw * rh * 4];
         let mut original = Vec::with_capacity(rw * rh * 4);
-        let lw = pixels.width() as usize;
-        let cov = selection.coverage();
-        let cw = cov.size().width as usize;
-        let cov = cov.as_raw();
-        let data = pixels.as_raw_mut();
-        for r in 0..rh {
-            let ly = rect.y as usize + r;
-            let row = &mut data[(ly * lw + rect.x as usize) * 4..][..rw * 4];
-            original.extend_from_slice(row);
-            let cy = (ly as i64 + oy) as usize;
-            let cx = (rect.x as i64 + ox) as usize;
-            let cov_row = &cov[cy * cw + cx..][..rw];
-            let piece_row = &mut piece[r * rw * 4..][..rw * 4];
-            for ((px, out), &c) in row
-                .as_chunks_mut::<4>()
-                .0
-                .iter_mut()
-                .zip(piece_row.as_chunks_mut::<4>().0)
-                .zip(cov_row)
-            {
-                if c == 0 || px[3] == 0 {
-                    continue;
-                }
-                let a = px[3] as u32;
-                let lifted = ((a * c as u32 + 127) / 255) as u8;
-                if lifted == 0 {
-                    continue;
-                }
-                *out = [px[0], px[1], px[2], lifted];
-                let kept = px[3] - lifted;
-                *px = if kept == 0 {
-                    [0; 4]
-                } else {
-                    [px[0], px[1], px[2], kept]
-                };
-            }
-        }
+        let pixels = layer.pixels_mut()?;
+        split_rows(
+            pixels,
+            selection,
+            rect,
+            (ox, oy),
+            Some((&mut piece, &mut original)),
+        );
         let size = Size::new(rect.width, rect.height);
         let origin = ((rect.x as i64 + ox) as i32, (rect.y as i64 + oy) as i32);
         Ok(Some(Float {

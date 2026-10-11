@@ -4,7 +4,7 @@
 
 use rp_doc::{
     Document, Float, Layer, LayerKind, Rect, RgbaImage, SelectMode, Selection, Size, SourceStore,
-    Transform,
+    Transform, erase_selected,
 };
 
 const R: [u8; 4] = [255, 0, 0, 255];
@@ -491,4 +491,123 @@ fn placed_bounds_cover_the_transformed_piece() {
     assert_eq!(f.placed_bounds(canvas), Some(Rect::new(5, 3, 2, 4)));
     f.set_transform(Transform::at(30.0, 30.0));
     assert_eq!(f.placed_bounds(canvas), None);
+}
+
+// ---------------------------------------------------------------- rect
+
+#[test]
+fn rect_selection_is_hard_and_exact() {
+    let s = Selection::from_rect(Size::new(5, 4), Rect::new(1, 1, 3, 2));
+    assert_eq!(
+        rows(&s),
+        vec![
+            vec![0, 0, 0, 0, 0],
+            vec![0, 255, 255, 255, 0],
+            vec![0, 255, 255, 255, 0],
+            vec![0, 0, 0, 0, 0],
+        ]
+    );
+    assert_eq!(s.bounds(), Some(Rect::new(1, 1, 3, 2)));
+    // Clipped to the canvas; empty rects select nothing.
+    let c = Selection::from_rect(Size::new(5, 4), Rect::new(3, 2, 10, 10));
+    assert_eq!(c.bounds(), Some(Rect::new(3, 2, 2, 2)));
+    assert!(Selection::from_rect(Size::new(5, 4), Rect::new(1, 1, 0, 3)).is_empty());
+    assert!(Selection::from_rect(Size::new(5, 4), Rect::new(7, 1, 2, 2)).is_empty());
+}
+
+#[test]
+fn rect_combines_like_polygons() {
+    let c = Size::new(6, 3);
+    let mut s = Selection::from_rect(c, Rect::new(0, 0, 2, 3));
+    s.combine_rect(SelectMode::Add, Rect::new(4, 0, 2, 1));
+    assert_eq!(s.bounds(), Some(Rect::new(0, 0, 6, 3)));
+    s.combine_rect(SelectMode::Subtract, Rect::new(0, 0, 6, 1));
+    assert_eq!(s.bounds(), Some(Rect::new(0, 1, 2, 2)));
+    let mut p = Selection::from_polygon(c, &rect_poly(0.0, 0.0, 2.0, 3.0));
+    p.combine_polygon(SelectMode::Add, &rect_poly(4.0, 0.0, 6.0, 1.0));
+    p.combine_polygon(SelectMode::Subtract, &rect_poly(0.0, 0.0, 6.0, 1.0));
+    assert_eq!(s, p);
+    s.combine_rect(SelectMode::Replace, Rect::new(5, 2, 1, 1));
+    assert_eq!(s.bounds(), Some(Rect::new(5, 2, 1, 1)));
+}
+
+// ---------------------------------------------------------------- erase
+
+#[test]
+fn erase_clears_inside_and_keeps_outside_bytes() {
+    let size = Size::new(9, 7);
+    let orig = pattern(size);
+    let mut layer = paint_layer(orig.clone(), (0, 0));
+    let sel = Selection::from_rect(size, Rect::new(2, 1, 4, 3));
+    let touched = erase_selected(&mut layer, &sel).unwrap();
+    assert_eq!(touched, Some(Rect::new(2, 1, 4, 3)));
+    let px = layer_pixels(&layer);
+    for y in 0..7 {
+        for x in 0..9 {
+            let inside = (2..6).contains(&x) && (1..4).contains(&y);
+            let want = if inside { CLEAR } else { orig.get(x, y) };
+            assert_eq!(px.get(x, y), want, "({x}, {y})");
+        }
+    }
+}
+
+#[test]
+fn erase_partially_clears_antialiased_edges() {
+    let size = Size::new(3, 1);
+    let mut layer = paint_layer(RgbaImage::filled(size, [10, 20, 30, 200]), (0, 0));
+    let sel = Selection::from_polygon(size, &rect_poly(0.0, 0.0, 1.5, 1.0));
+    erase_selected(&mut layer, &sel).unwrap();
+    let px = layer_pixels(&layer);
+    assert_eq!(px.get(0, 0), CLEAR);
+    // Half coverage (128): 200 − round(200·128/255) = 200 − 100.
+    assert_eq!(px.get(1, 0), [10, 20, 30, 100]);
+    assert_eq!(px.get(2, 0), [10, 20, 30, 200]);
+}
+
+#[test]
+fn erase_matches_the_hole_a_lift_leaves() {
+    let size = Size::new(9, 7);
+    let sel = Selection::from_polygon(size, &[[1.3, 0.7], [7.9, 2.2], [4.1, 6.6]]);
+    let mut lifted = paint_layer(pattern(size), (0, 0));
+    Float::lift(&mut lifted, &sel).unwrap().unwrap();
+    let mut erased = paint_layer(pattern(size), (0, 0));
+    erase_selected(&mut erased, &sel).unwrap();
+    assert_eq!(layer_pixels(&erased), layer_pixels(&lifted));
+}
+
+#[test]
+fn erase_on_offset_layer_uses_canvas_coordinates() {
+    let lsize = Size::new(4, 4);
+    let orig = pattern(lsize);
+    let mut layer = paint_layer(orig.clone(), (3, 2));
+    let canvas = Size::new(10, 10);
+    let sel = Selection::from_rect(canvas, Rect::new(1, 1, 4, 3));
+    let touched = erase_selected(&mut layer, &sel).unwrap();
+    // Canvas (3..5, 2..4) is layer (0..2, 0..2).
+    assert_eq!(touched, Some(Rect::new(0, 0, 2, 2)));
+    let px = layer_pixels(&layer);
+    for y in 0..4 {
+        for x in 0..4 {
+            let want = if x < 2 && y < 2 {
+                CLEAR
+            } else {
+                orig.get(x, y)
+            };
+            assert_eq!(px.get(x, y), want, "({x}, {y})");
+        }
+    }
+    // A selection off the layer changes nothing.
+    let miss = Selection::from_rect(canvas, Rect::new(0, 0, 2, 2));
+    assert_eq!(erase_selected(&mut layer, &miss).unwrap(), None);
+}
+
+#[test]
+fn erase_honors_locks() {
+    let canvas = Size::new(2, 2);
+    let mut layer = paint_layer(pattern(canvas), (0, 0));
+    layer.lock.pixels = true;
+    assert_eq!(
+        erase_selected(&mut layer, &Selection::all(canvas)).unwrap_err(),
+        rp_doc::EditError::PixelsLocked
+    );
 }
