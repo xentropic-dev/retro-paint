@@ -10,6 +10,7 @@ use std::sync::Arc;
 use rp_doc::{Document, Layer, LayerId, LayerKind, RgbaImage, Size, SourceStore, Tool};
 use rp_format::ExportOptions;
 
+use crate::brush_library::BrushLibrary;
 use crate::color_picker_ops::ColorPicker;
 use crate::file_ops::{Alert, ExportDraft, PendingAction, SavedMark};
 use crate::filter_ops::PaletteMemory;
@@ -223,6 +224,9 @@ pub struct EditorState {
     pub palette_memory: PaletteMemory,
     /// The paint brush and its size (Brush and Eraser tools).
     pub brush: BrushState,
+    /// The Brushes section: library brushes, selection, added paths.
+    /// Editor state: survives New and Open, never in a document.
+    pub brushes: BrushLibrary,
     /// Brush or Eraser stroke in progress.
     pub stroke: Option<Stroke>,
     /// Move / Select drag in progress.
@@ -298,6 +302,7 @@ impl EditorState {
             renaming: None,
             palette_memory: PaletteMemory::default(),
             brush: BrushState::default(),
+            brushes: BrushLibrary::new(),
             stroke: None,
             transform_drag: None,
             selection: SelectionState::new(s),

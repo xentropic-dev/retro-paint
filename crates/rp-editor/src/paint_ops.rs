@@ -8,9 +8,14 @@
 //!   cursor into the foreground (left) or background (right), whatever the
 //!   edit target.
 //! - The default brush is the built-in hard round brush; a Hard/Soft toggle
-//!   swaps in the built-in soft one. Size is 1–256 canvas pixels; the brush
-//!   is resized once per size change and the sized brush is cached, never
-//!   resized per dab.
+//!   swaps in the built-in soft one (round brushes only). Size is 1–256
+//!   canvas pixels for round brushes; for a sampled library brush (see
+//!   [`crate::brush_library`]) it is the longest side, 1–1024, starting at
+//!   the native size clamped to the canvas. The brush is resized once per
+//!   size change and the sized brush is cached, never resized per dab; a
+//!   sampled brush resizes from its ≤1024 px working base, never from the
+//!   original sample. Sampled brushes stamp the fg/bg color through their
+//!   mask (a color `.gbr`'s pixmap is dropped).
 //! - Dabs are spaced with [`Spacer`] at [`Brush::step`] along the pointer
 //!   path, so fast moves interpolate between mouse events and leftover
 //!   distance carries into the next event.
@@ -29,9 +34,10 @@
 //!   shows), never flattens on the UI thread. Fully transparent pixels are
 //!   not picked.
 
-use rp_brush::{Brush, Spacer, stamp};
+use rp_brush::{Brush, BrushSource, Spacer, stamp};
 use rp_doc::{EditError, LayerId, LayerKind, Rect, Size, Tool};
 
+use crate::brush_library::BrushKey;
 use crate::undo_ops::EditLabel;
 use rp_palette_dither::Rgb;
 
@@ -41,13 +47,16 @@ use crate::viewport::Vec2;
 
 /// Smallest brush size, in canvas pixels.
 pub const MIN_BRUSH_SIZE: u32 = 1;
-/// Largest brush size, in canvas pixels.
+/// Largest size of the built-in round brushes, in canvas pixels.
 pub const MAX_BRUSH_SIZE: u32 = 256;
+/// Largest size of a sampled (library) brush: its longest side, in canvas
+/// pixels. Also the longest side of its working base.
+pub const MAX_SAMPLED_BRUSH_SIZE: u32 = 1024;
 /// Brush size of a fresh editor.
 pub const DEFAULT_BRUSH_SIZE: u32 = 12;
 
 /// The built-in brush tips.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub enum BrushTip {
     #[default]
     Hard,
@@ -62,7 +71,15 @@ impl BrushTip {
         }
     }
 
-    fn make(self, size: u32) -> Brush {
+    /// Name shown in the brush library and the ribbon tooltip.
+    pub const fn name(self) -> &'static str {
+        match self {
+            BrushTip::Hard => "Round Hard",
+            BrushTip::Soft => "Round Soft",
+        }
+    }
+
+    pub fn make(self, size: u32) -> Brush {
         match self {
             BrushTip::Hard => Brush::round_hard(size as f32),
             BrushTip::Soft => Brush::round_soft(size as f32),
@@ -71,11 +88,20 @@ impl BrushTip {
 }
 
 /// The selected brush and its size, with the brush kept at that size.
+///
+/// Either a built-in round tip (size 1–256, Hard/Soft applies) or a sampled
+/// brush from the library (size = its longest side, 1–1024). A sampled
+/// brush keeps a *working base* no larger than
+/// [`MAX_SAMPLED_BRUSH_SIZE`], built off the UI thread, so a size step
+/// resizes from at most 1024 px instead of the 5000 px original.
 #[derive(Clone, Debug)]
 pub struct BrushState {
+    /// The round tip in use, or the one Hard/Soft returns to.
     tip: BrushTip,
+    /// Name of the sampled brush in use; `None` for a round tip.
+    sampled: Option<String>,
     size: u32,
-    /// The brush as chosen (a built-in tip, or a loaded `.gbr`/`.vbr`).
+    /// The brush as chosen (a built-in tip, or a sampled working base).
     base: Brush,
     /// `base` at `size`; what every dab uses.
     sized: Brush,
@@ -89,6 +115,7 @@ impl Default for BrushState {
         let brush = tip.make(DEFAULT_BRUSH_SIZE);
         Self {
             tip,
+            sampled: None,
             size: DEFAULT_BRUSH_SIZE,
             base: brush.clone(),
             sized: brush,
@@ -107,6 +134,25 @@ impl BrushState {
         self.tip
     }
 
+    /// Whether a built-in round tip is in use (Hard/Soft applies).
+    pub fn is_round(&self) -> bool {
+        self.sampled.is_none()
+    }
+
+    /// The brush's display name.
+    pub fn name(&self) -> &str {
+        self.sampled.as_deref().unwrap_or(self.tip.name())
+    }
+
+    /// Largest size for the current brush kind.
+    pub fn max_size(&self) -> u32 {
+        if self.is_round() {
+            MAX_BRUSH_SIZE
+        } else {
+            MAX_SAMPLED_BRUSH_SIZE
+        }
+    }
+
     /// The brush at the current size.
     pub fn brush(&self) -> &Brush {
         &self.sized
@@ -117,10 +163,10 @@ impl BrushState {
         self.resizes
     }
 
-    /// Sets the size (clamped to 1–256). Resizes the brush only when the
-    /// size actually changes. Returns whether it changed.
+    /// Sets the size (clamped to 1–[`BrushState::max_size`]). Resizes the
+    /// brush only when the size actually changes. Returns whether it changed.
     pub fn set_size(&mut self, size: u32) -> bool {
-        let size = size.clamp(MIN_BRUSH_SIZE, MAX_BRUSH_SIZE);
+        let size = size.clamp(MIN_BRUSH_SIZE, self.max_size());
         if size == self.size {
             return false;
         }
@@ -130,38 +176,77 @@ impl BrushState {
         true
     }
 
-    /// Switches to a built-in tip at the current size (no resize needed).
+    /// Switches to a built-in round tip at the current size (clamped to
+    /// 1–256). Generating a round brush is not a resize.
     pub fn set_tip(&mut self, tip: BrushTip) {
         self.tip = tip;
+        self.sampled = None;
+        self.size = self.size.clamp(MIN_BRUSH_SIZE, MAX_BRUSH_SIZE);
         self.base = tip.make(self.size);
         self.sized = self.base.clone();
     }
 
-    /// Uses a loaded brush (e.g. from [`rp_brush::load`]) at the current size.
-    pub fn set_brush(&mut self, brush: Brush) {
-        self.sized = if brush.diameter() == self.size as f32 {
-            brush.clone()
+    /// Uses a sampled brush: `base` is its working base (longest side at
+    /// most [`MAX_SAMPLED_BRUSH_SIZE`], see [`working_base`]), painted at
+    /// `size` (clamped to 1–1024).
+    pub fn set_sampled(&mut self, name: impl Into<String>, base: Brush, size: u32) {
+        self.sampled = Some(name.into());
+        self.size = size.clamp(MIN_BRUSH_SIZE, MAX_SAMPLED_BRUSH_SIZE);
+        self.sized = if base.diameter() == self.size as f32 {
+            base.clone()
         } else {
             self.resizes += 1;
-            brush.resized(self.size as f32)
+            base.resized(self.size as f32)
         };
-        self.base = brush;
+        self.base = base;
     }
 }
 
+/// A decoded library brush made ready to paint with: its pixmap dropped (it
+/// stamps the fg/bg color through its mask) and, for bitmaps larger than
+/// [`MAX_SAMPLED_BRUSH_SIZE`], area-downscaled to that longest side and
+/// made a plain bitmap again, so later resizes start from at most 1024 px.
+/// Parametric brushes are kept as they are (they regenerate at any size).
+/// Slow for big samples (tens of ms); run it off the UI thread.
+pub fn working_base(brush: Brush) -> Brush {
+    let mut b = brush;
+    b.pixmap = None;
+    if matches!(b.source, BrushSource::Parametric(_)) {
+        return b;
+    }
+    let long = b.mask.width.max(b.mask.height);
+    let mask = if long > MAX_SAMPLED_BRUSH_SIZE {
+        b.resized(MAX_SAMPLED_BRUSH_SIZE as f32).mask
+    } else {
+        b.mask
+    };
+    Brush::bitmap(b.name, b.spacing, mask, None)
+}
+
+/// The size a sampled brush starts at: its native longest side, clamped to
+/// the canvas's shorter side and to 1–1024.
+pub fn default_sampled_size(native_long_side: u32, canvas: Size) -> u32 {
+    native_long_side
+        .min(canvas.width.min(canvas.height))
+        .clamp(MIN_BRUSH_SIZE, MAX_SAMPLED_BRUSH_SIZE)
+}
+
 /// The sizes `[` and `]` step through: 1–10 by 1, then by 5 to 50, by 10
-/// to 100, by 25 to 250, then 256.
-const SIZE_LADDER: [u32; 30] = [
+/// to 100, by 25 to 250, 256, then (sampled brushes only) by 50 to 500, by
+/// 100 to 1000, and 1024.
+const SIZE_LADDER: [u32; 41] = [
     1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80, 90, 100, 125, 150,
-    175, 200, 225, 250, 256,
+    175, 200, 225, 250, 256, 300, 350, 400, 450, 500, 600, 700, 800, 900, 1000, 1024,
 ];
 
-/// Size after one `]` press: the next larger size on the ladder.
-pub fn next_size_up(size: u32) -> u32 {
+/// Size after one `]` press: the next larger size on the ladder, at most
+/// `max`.
+pub fn next_size_up(size: u32, max: u32) -> u32 {
     SIZE_LADDER
         .into_iter()
         .find(|&s| s > size)
-        .unwrap_or(MAX_BRUSH_SIZE)
+        .unwrap_or(max)
+        .min(max)
 }
 
 /// Size after one `[` press: the next smaller size on the ladder.
@@ -308,7 +393,8 @@ fn rgba(c: Rgb) -> [u8; 4] {
 }
 
 impl EditorState {
-    /// Sets the brush size (1–256); see [`BrushState::set_size`].
+    /// Sets the brush size (1–256 round, 1–1024 sampled); see
+    /// [`BrushState::set_size`].
     pub fn set_brush_size(&mut self, size: u32) {
         if self.brush.set_size(size) {
             self.status = format!("Brush size {}", self.brush.size());
@@ -317,7 +403,8 @@ impl EditorState {
 
     /// `]`: next larger brush size.
     pub fn brush_size_up(&mut self) {
-        self.set_brush_size(next_size_up(self.brush.size()));
+        let max = self.brush.max_size();
+        self.set_brush_size(next_size_up(self.brush.size(), max));
     }
 
     /// `[`: next smaller brush size.
@@ -325,8 +412,20 @@ impl EditorState {
         self.set_brush_size(next_size_down(self.brush.size()));
     }
 
+    /// The ribbon's Hard/Soft toggle. Only round brushes have a tip; with a
+    /// sampled brush selected it refuses and says so.
     pub fn set_brush_tip(&mut self, tip: BrushTip) {
+        if !self.brush.is_round() {
+            self.status = "Hard/Soft applies to the round brushes only".into();
+            return;
+        }
+        self.select_round_brush(tip);
+    }
+
+    /// Switches to a built-in round brush (library or ribbon).
+    pub fn select_round_brush(&mut self, tip: BrushTip) {
         self.brush.set_tip(tip);
+        self.brushes.select(BrushKey::Builtin(tip));
         self.status = format!("{} brush", tip.label());
     }
 
@@ -592,19 +691,30 @@ mod tests {
 
     #[test]
     fn bracket_steps_are_monotonic_and_clamped() {
-        assert_eq!(next_size_up(1), 2);
-        assert_eq!(next_size_up(9), 10);
-        assert_eq!(next_size_up(10), 15);
-        assert_eq!(next_size_up(12), 15);
-        assert_eq!(next_size_up(250), 256);
-        assert_eq!(next_size_up(256), 256);
+        let m = MAX_BRUSH_SIZE;
+        assert_eq!(next_size_up(1, m), 2);
+        assert_eq!(next_size_up(9, m), 10);
+        assert_eq!(next_size_up(10, m), 15);
+        assert_eq!(next_size_up(12, m), 15);
+        assert_eq!(next_size_up(250, m), 256);
+        assert_eq!(next_size_up(256, m), 256);
+        let big = MAX_SAMPLED_BRUSH_SIZE;
+        assert_eq!(next_size_up(256, big), 300);
+        assert_eq!(next_size_up(1000, big), 1024);
+        assert_eq!(next_size_up(1024, big), 1024);
+        assert_eq!(next_size_down(1024), 1000);
+        assert_eq!(next_size_down(300), 256);
+        for s in MIN_BRUSH_SIZE..=big {
+            let up = next_size_up(s, big);
+            assert!(up >= s && up <= big);
+        }
         assert_eq!(next_size_down(1), 1);
         assert_eq!(next_size_down(15), 10);
         assert_eq!(next_size_down(12), 10);
         assert_eq!(next_size_down(10), 9);
         assert_eq!(next_size_down(256), 250);
         for s in MIN_BRUSH_SIZE..=MAX_BRUSH_SIZE {
-            assert!(next_size_up(s) >= s && next_size_down(s) <= s);
+            assert!(next_size_up(s, m) >= s && next_size_down(s) <= s);
         }
         let mut st = EditorState::new();
         st.brush_size_up();
@@ -837,6 +947,90 @@ mod tests {
         assert!(!st.pick_color(Some(frame), Vec2::new(-0.5, 0.5), PaintButton::Primary));
         assert!(!st.pick_color(None, Vec2::new(1.5, 1.5), PaintButton::Primary));
         assert_eq!(st.document.fg, Rgb::new(10, 20, 30));
+    }
+
+    /// A 9×1 horizontal bar: a sampled brush no round tip could fake.
+    fn bar_brush() -> Brush {
+        Brush::bitmap("Bar", 100.0, rp_brush::Mask::new(9, 1, vec![255; 9]), None)
+    }
+
+    #[test]
+    fn sampled_brush_paints_fg_bg_erases_and_masks_with_its_shape() {
+        let mut st = editor(32, 32);
+        st.document.fg = Rgb::new(9, 8, 7);
+        st.document.bg = Rgb::new(1, 2, 3);
+        st.brush.set_sampled("Bar", working_base(bar_brush()), 9);
+        st.begin_stroke(Vec2::new(10.5, 10.5), PaintButton::Primary);
+        st.end_stroke();
+        assert_eq!(rgba_at(&st, 6, 10), [9, 8, 7, 255]);
+        assert_eq!(rgba_at(&st, 14, 10), [9, 8, 7, 255]);
+        assert_eq!(alpha_at(&st, 10, 9), 0, "a bar, not a disc");
+        assert_eq!(alpha_at(&st, 10, 11), 0);
+        st.begin_stroke(Vec2::new(10.5, 20.5), PaintButton::Secondary);
+        st.end_stroke();
+        assert_eq!(rgba_at(&st, 10, 20), [1, 2, 3, 255]);
+        st.tool = Tool::Eraser;
+        st.begin_stroke(Vec2::new(10.5, 10.5), PaintButton::Primary);
+        st.end_stroke();
+        assert_eq!(alpha_at(&st, 6, 10), 0);
+        assert_eq!(alpha_at(&st, 10, 20), 255);
+
+        // Mask painting uses it too.
+        let id = st.selected_layer.unwrap();
+        st.add_mask(id);
+        st.toggle_mask_target(id);
+        st.tool = Tool::Brush;
+        st.begin_stroke(Vec2::new(16.5, 5.5), PaintButton::Primary);
+        st.end_stroke();
+        let m = st.document.layer(id).unwrap().mask.as_ref().unwrap();
+        let at = |x: u32, y: u32| m.as_raw()[(y * 32 + x) as usize];
+        assert_eq!(at(12, 5), MASK_HIDE);
+        assert_eq!(at(20, 5), MASK_HIDE);
+        assert_eq!(at(16, 6), MASK_SHOW);
+    }
+
+    /// Timing note for big sampled brushes (the user's 75 MB pack has
+    /// 5000 px samples): a size step resizes from the ≤1024 px working base,
+    /// and a stroke with a 1024 px dab at 25% spacing stamps one dab per
+    /// 256 px. Measured on the dev box (rp-brush builds at opt-level 3 in
+    /// dev): resize 10–15 ms, 15–23 ms per fully covered 1024 px dab
+    /// (`rp_brush::stamp`, ~15 ns/px; splatter samples are mostly empty and
+    /// cheaper). The bounds here are loose; they catch a regression to
+    /// resizing from the original or stamping per pixel moved.
+    #[test]
+    fn big_sampled_brush_resize_and_stroke_cost() {
+        use std::time::Instant;
+        let n = 1024u32;
+        let data: Vec<u8> = (0..n * n)
+            .map(|i| ((i % n) * 255 / n) as u8 / 2 + ((i / n) % 7) as u8)
+            .collect();
+        let sample = Brush::bitmap("Big", 25.0, rp_brush::Mask::new(n, n, data), None);
+        let mut st = editor(2048, 2048);
+        st.brush.set_sampled("Big", working_base(sample), 1024);
+
+        let t = Instant::now();
+        st.brush_size_down(); // 1000
+        st.brush_size_up(); // 1024
+        let resize = t.elapsed() / 2;
+        assert_eq!(st.brush.size(), 1024);
+
+        let t = Instant::now();
+        st.begin_stroke(Vec2::new(100.5, 1000.5), PaintButton::Primary);
+        let mut dabs = 1;
+        for i in 1..=19 {
+            dabs += st.continue_stroke(Vec2::new(100.5 + 100.0 * i as f32, 1000.5));
+        }
+        let painting = t.elapsed();
+        st.end_stroke();
+        let stroke = t.elapsed();
+        assert_eq!(dabs, 8, "1900 px at a 256 px step, plus the first dab");
+        eprintln!(
+            "1024 px sampled brush: resize {resize:.2?}; {dabs} dabs {painting:.2?} \
+             ({:.2?}/dab); with the undo commit {stroke:.2?}",
+            painting / dabs as u32
+        );
+        assert!(resize.as_millis() < 250, "resize {resize:?}");
+        assert!(stroke.as_millis() < 2000, "stroke {stroke:?}");
     }
 
     #[test]

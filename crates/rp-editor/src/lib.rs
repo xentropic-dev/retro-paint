@@ -11,6 +11,9 @@
 //! `rp-dos`. The same flattened image comes back to the canvas view, so the
 //! UI thread never flattens.
 
+pub mod brush_config;
+pub mod brush_library;
+pub mod brush_loader;
 pub mod canvas_image;
 mod canvas_view;
 mod color_picker;

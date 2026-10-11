@@ -4363,6 +4363,7 @@ dependencies = [
  "rp-doc",
  "rp-format",
  "rp-palette-dither",
+ "serde_json",
  "usvg",
 ]
 

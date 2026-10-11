@@ -13,6 +13,8 @@ gpui.workspace = true
 gpui_platform.workspace = true
 # Wakes the GPUI task that receives canvas images from the render worker.
 async-channel = "2"
+# The brush library's config file (a JSON list of paths).
+serde_json = "1"
 # `image::Frame` for GPUI's `RenderImage` (same major as GPUI's), and decoding inserted images.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 
