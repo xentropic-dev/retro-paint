@@ -50,7 +50,9 @@ actions!(
         Undo,
         Redo,
         Paste,
-        DuplicateLayer
+        DuplicateLayer,
+        SelectAll,
+        Deselect
     ]
 );
 
@@ -75,10 +77,13 @@ pub fn bind_keys(cx: &mut App) {
             EditCommand::Redo => KeyBinding::new(k, Redo, None),
             EditCommand::Paste => KeyBinding::new(k, Paste, None),
             EditCommand::DuplicateLayer => KeyBinding::new(k, DuplicateLayer, None),
+            EditCommand::SelectAll => KeyBinding::new(k, SelectAll, None),
+            EditCommand::Deselect => KeyBinding::new(k, Deselect, None),
             EditCommand::FlipHorizontal
             | EditCommand::FlipVertical
-            | EditCommand::RasterizeLayer => {
-                unreachable!("flips and rasterize have no key binding")
+            | EditCommand::RasterizeLayer
+            | EditCommand::Clear => {
+                unreachable!("flips, rasterize and clear have no key binding")
             }
         }));
     }
@@ -318,6 +323,14 @@ impl EditorView {
     fn on_duplicate_layer(&mut self, _: &DuplicateLayer, _: &mut Window, cx: &mut Context<Self>) {
         self.edit(cx, |s| s.edit_command(EditCommand::DuplicateLayer));
     }
+    fn on_select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
+        if self.state.read(cx).renaming.is_none() {
+            self.edit(cx, |s| s.edit_command(EditCommand::SelectAll));
+        }
+    }
+    fn on_deselect(&mut self, _: &Deselect, _: &mut Window, cx: &mut Context<Self>) {
+        self.edit(cx, |s| s.edit_command(EditCommand::Deselect));
+    }
 
     fn menu_bar(&self, cx: &mut Context<Self>) -> Div {
         let state = self.state.read(cx);
@@ -362,11 +375,9 @@ impl EditorView {
                 .py_1()
                 .child(cmd.menu_label(history))
                 .child(
-                    div().text_color(rgb(TEXT_DIM)).child(
-                        cmd.keystrokes()
-                            .first()
-                            .map_or(String::new(), |k| shortcut_label(k)),
-                    ),
+                    div()
+                        .text_color(rgb(TEXT_DIM))
+                        .child(cmd.shortcut_hint().unwrap_or_default()),
                 );
             menu = menu.child(if enabled {
                 item.cursor_pointer()
@@ -629,6 +640,7 @@ impl EditorView {
                         );
                         let mut plan = cache.prepare(&s.viewport, bounds, scale);
                         plan.handles = s.transform_handles();
+                        plan.selection = s.selection_overlay();
                         (plan, s.viewport.zoom() != before)
                     })
                 });
@@ -696,7 +708,12 @@ impl EditorView {
                     if this.state.read(cx).space_held {
                         this.edit(cx, |s| s.begin_pan(p));
                     } else {
-                        this.press(p, PaintButton::Primary, cx);
+                        let sel = SelectPress {
+                            shift,
+                            alt: ev.modifiers.alt,
+                            clicks: ev.click_count,
+                        };
+                        this.press(p, PaintButton::Primary, sel, cx);
                     }
                 }),
             )
@@ -704,7 +721,7 @@ impl EditorView {
                 MouseButton::Right,
                 cx.listener(|this, ev: &MouseDownEvent, _, cx| {
                     let p = this.local(ev.position);
-                    this.press(p, PaintButton::Secondary, cx);
+                    this.press(p, PaintButton::Secondary, SelectPress::default(), cx);
                 }),
             )
             .on_mouse_up(MouseButton::Middle, cx.listener(Self::on_pan_end))
@@ -744,8 +761,9 @@ impl EditorView {
 
     /// A paint button went down at canvas-area point `p`: start a stroke
     /// (Brush, Eraser), pick a color (Picker) or start a move / transform
-    /// drag (Move, Select; left button only).
-    fn press(&mut self, p: Vec2, button: PaintButton, cx: &mut Context<Self>) {
+    /// drag (Move, Select; left button only), or a selection outline
+    /// (Lasso, Rect Select; left button only, `sel` holds its modifiers).
+    fn press(&mut self, p: Vec2, button: PaintButton, sel: SelectPress, cx: &mut Context<Self>) {
         let frame = self.canvas_cache.frame_view();
         self.state.update(cx, |s, cx| {
             s.pointer_moved(p);
@@ -756,6 +774,8 @@ impl EditorView {
                 s.pick_color(frame, c, button);
             } else if s.tool_transforms() && button == PaintButton::Primary {
                 s.begin_transform(p);
+            } else if s.tool_selects() && button == PaintButton::Primary {
+                s.begin_select(p, sel.shift, sel.alt, sel.clicks);
             }
             cx.notify();
         });
@@ -767,6 +787,8 @@ impl EditorView {
             self.edit(cx, |s| s.end_stroke());
         } else if s.transform_drag.is_some() {
             self.edit(cx, |s| s.end_transform());
+        } else if s.select_dragging() {
+            self.edit(cx, |s| s.end_select_drag());
         }
     }
 
@@ -801,6 +823,15 @@ impl EditorView {
                 self.edit(cx, |s| s.color_key(c));
             }
             "]" if plain => self.edit(cx, |s| s.brush_size_up()),
+            "enter" if s.renaming.is_none() && s.selection.draft.is_some() => {
+                self.edit(cx, |s| s.finish_lasso());
+            }
+            "escape" if s.renaming.is_none() && s.selection.draft.is_some() => {
+                self.edit(cx, |s| s.cancel_select_draft());
+            }
+            "delete" | "backspace" if plain && s.renaming.is_none() => {
+                self.edit(cx, |s| s.edit_command(EditCommand::Clear));
+            }
             key if s.renaming.is_none()
                 && let Some(t) = tool_key(key, plain && !m.shift) =>
             {
@@ -891,6 +922,14 @@ impl EditorView {
             .child(format!("Cursor {}", state.cursor_label()))
             .child(state.status.clone())
     }
+}
+
+/// Modifiers and click count of a left press, for the selection tools.
+#[derive(Clone, Copy, Default)]
+struct SelectPress {
+    shift: bool,
+    alt: bool,
+    clicks: usize,
 }
 
 /// A top-level menu-bar button.
@@ -1097,6 +1136,8 @@ impl Render for EditorView {
             .on_action(cx.listener(Self::on_undo))
             .on_action(cx.listener(Self::on_redo))
             .on_action(cx.listener(Self::on_duplicate_layer))
+            .on_action(cx.listener(Self::on_select_all))
+            .on_action(cx.listener(Self::on_deselect))
             .on_key_down(cx.listener(Self::on_key_down))
             .on_key_up(cx.listener(Self::on_key_up))
             .on_modifiers_changed(cx.listener(|this, ev: &ModifiersChangedEvent, _, cx| {

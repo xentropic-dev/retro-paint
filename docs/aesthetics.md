@@ -35,8 +35,8 @@ The editor and DOS view are always two separate OS windows. With one screen, the
 
 ## Full-color view (left)
 
-- File and Edit menus at the top. File: New (Ctrl+N), Open… (Ctrl+O), Insert Image… (Ctrl+I), Save (Ctrl+S), Save As… (Ctrl+Shift+S), Export PNG… (Ctrl+E), see [File Format](file-format.md); Project Settings… (Ctrl+Shift+P), see [Canvas, output, and screen resolutions](#canvas-output-and-screen-resolutions); Quit (Ctrl+Q). Edit: Undo (Ctrl+Z), Redo (Ctrl+Shift+Z or Ctrl+Y), see [Undo and redo](#undo-and-redo); Paste (Ctrl+V), see [Inserting images](#inserting-images); Duplicate Layer (Ctrl+J), Flip Horizontal, Flip Vertical, Rasterize Layer, see [Layers panel](#layers-panel).
-- Toolbar ribbon at the top, all icon buttons (the File/Edit menus stay words): the tools (Select, Lasso, Rect Select, Move, Brush, Eraser, Picker), Insert Image, the brush size −/+ around the size readout, the Hard/Soft tip toggle, then at the right end the fg/bg chips with swap and reset. Icons are 16×16 one-bit pixel art (a DOS-paint look) drawn as SVG and tinted with the theme's text color (white on the accent fill when selected, dimmed when a size step is at its limit); buttons are 28 px square. Hovering a button shows its name and shortcut, e.g. "Brush (B)". Tool keys, with no modifiers held and not while renaming a layer: `S` Select, `M` Move, `B` Brush, `E` Eraser, `I` Picker (`L` Lasso and `R` Rect Select come with the lasso-tool feature).
+- File and Edit menus at the top. File: New (Ctrl+N), Open… (Ctrl+O), Insert Image… (Ctrl+I), Save (Ctrl+S), Save As… (Ctrl+Shift+S), Export PNG… (Ctrl+E), see [File Format](file-format.md); Project Settings… (Ctrl+Shift+P), see [Canvas, output, and screen resolutions](#canvas-output-and-screen-resolutions); Quit (Ctrl+Q). Edit: Undo (Ctrl+Z), Redo (Ctrl+Shift+Z or Ctrl+Y), see [Undo and redo](#undo-and-redo); Paste (Ctrl+V), see [Inserting images](#inserting-images); Duplicate Layer (Ctrl+J), Flip Horizontal, Flip Vertical, Rasterize Layer, see [Layers panel](#layers-panel); Select All (Ctrl+A), Deselect (Ctrl+D), Clear (Delete), see [Selecting](#selecting).
+- Toolbar ribbon at the top, all icon buttons (the File/Edit menus stay words): the tools (Select, Lasso, Rect Select, Move, Brush, Eraser, Picker), Insert Image, the brush size −/+ around the size readout, the Hard/Soft tip toggle, then at the right end the fg/bg chips with swap and reset. Icons are 16×16 one-bit pixel art (a DOS-paint look) drawn as SVG and tinted with the theme's text color (white on the accent fill when selected, dimmed when a size step is at its limit); buttons are 28 px square. Hovering a button shows its name and shortcut, e.g. "Brush (B)". Tool keys, with no modifiers held and not while renaming a layer: `S` Select, `L` Lasso, `R` Rect Select, `M` Move, `B` Brush, `E` Eraser, `I` Picker.
 - Full set of tools.
 - Layer selection panel, inspired by GIMP or Photoshop.
 - Reorder layers.
@@ -80,6 +80,18 @@ Top of the right-hand panel column. The list shows the top of the stack at the t
 - The rotation handle rotates about the image center; hold Shift to snap to 15° steps. Pressing or releasing Shift mid-drag takes effect immediately.
 - A position-locked layer refuses moves, nudges, scaling and rotation; the status bar says why. A pixel lock does not stop moving.
 - The status bar shows the move offset, scale percentages or angle while dragging.
+
+### Selecting
+
+Select parts of the canvas with **Rect Select** (`R`) or **Lasso** (`L`), then erase them with Delete. The selection is soft-edged coverage (see `rp_doc::selection`); the editor logic is `rp-editor`'s `select_ops`.
+
+- **Rect Select:** drag a rectangle; it snaps to whole pixels and is clipped to the canvas. Pressing Shift *during* the drag squares it. Shift held at the press means Add instead (to square an Add drag, release Shift and press it again). A click without a drag deselects.
+- **Lasso:** an outline that starts with a drag is a freehand lasso and closes when the button is released. An outline that starts with a click is polygonal: each click adds a straight segment and a drag between clicks adds a freehand piece. It closes on a double-click, Enter, or a click on its first point (a marker appears there when the pointer is close enough). Escape cancels an unfinished outline; switching tools drops it too.
+- **Modes**, from the modifiers at the press that starts the outline: Shift adds to the selection, Alt subtracts, neither replaces it.
+- **Edit > Select All** (Ctrl+A) selects the whole canvas; **Edit > Deselect** (Ctrl+D) clears the selection.
+- **Edit > Clear** (Delete or Backspace) erases the selected pixels of the selected paint layer (soft edges keep part of their alpha) as one undo step, "Clear Selection". It refuses on image layers ("Rasterize it to erase"), on pixel-locked layers, and with nothing selected; the status bar says why. With the mask as the edit target it fills the selected mask area white (shown) instead.
+- The outline being drawn is a light line over a dark one; the selection edge is a dashed black-and-white line along pixel boundaries (where coverage reaches 50%). Both are 1 screen pixel wide at any zoom. The edge is traced once per selection change, not per frame.
+- The selection belongs to the open document but is not part of the file or an undo step. It survives tool switches and undo/redo; New, Open and a canvas size change drop it.
 
 ### Painting
 

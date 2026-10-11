@@ -17,6 +17,7 @@ use crate::layer_ops::RenameEdit;
 use crate::paint_ops::{BrushState, Stroke};
 use crate::panel_layout::{PanelSection, PanelSections};
 use crate::project_ops::ProjectDraft;
+use crate::select_ops::SelectionState;
 use crate::transform_ops::TransformDrag;
 use crate::undo_ops::UndoHistory;
 use crate::viewport::{Vec2, Viewport};
@@ -225,6 +226,9 @@ pub struct EditorState {
     pub stroke: Option<Stroke>,
     /// Move / Select drag in progress.
     pub transform_drag: Option<TransformDrag>,
+    /// The document's selection and the outline being drawn (see
+    /// [`crate::select_ops`]). Not part of the document or its history.
+    pub selection: SelectionState,
     /// Whether shift was held at the last pointer or key event (frees the
     /// aspect ratio while scaling, snaps the angle while rotating).
     pub shift_held: bool,
@@ -293,6 +297,7 @@ impl EditorState {
             brush: BrushState::default(),
             stroke: None,
             transform_drag: None,
+            selection: SelectionState::new(s),
             shift_held: false,
             project_dialog: None,
             color_picker: None,
@@ -327,6 +332,7 @@ impl EditorState {
         self.project_dialog = None;
         self.color_picker = None;
         self.document = document;
+        self.reset_selection();
         self.viewport.set_canvas_size(s.width, s.height);
         self.auto_fit = true;
         self.viewport.fit();
@@ -373,6 +379,9 @@ impl EditorState {
         }
         if self.transform_drag.is_some() {
             self.continue_transform(screen, self.shift_held);
+        }
+        if self.selection.draft.is_some() {
+            self.continue_select(screen);
         }
     }
 
@@ -449,7 +458,12 @@ impl EditorState {
         }
     }
 
+    /// Switches tools; an unfinished selection outline is dropped (the
+    /// selection itself stays).
     pub fn select_tool(&mut self, tool: Tool) {
+        if tool != self.tool {
+            self.selection.draft = None;
+        }
         self.tool = tool;
     }
 

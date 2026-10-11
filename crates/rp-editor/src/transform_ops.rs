@@ -519,6 +519,7 @@ impl EditorState {
             return;
         }
         self.shift_held = shift;
+        self.select_shift_changed(shift);
         if let (Some(_), Some(c)) = (&self.transform_drag, self.cursor_canvas) {
             self.continue_transform(self.viewport.canvas_to_screen(c), shift);
         }

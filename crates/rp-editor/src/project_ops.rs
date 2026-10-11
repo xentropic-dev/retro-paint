@@ -454,15 +454,16 @@ impl EditorState {
         if !apply_settings(&mut self.document, s) {
             return None;
         }
-        let d = &self.document;
-        if d.canvas_size != before.canvas_size {
+        if self.document.canvas_size != before.canvas_size {
             self.stroke = None;
             self.transform_drag = None;
-            self.viewport
-                .set_canvas_size(d.canvas_size.width, d.canvas_size.height);
+            self.reset_selection();
+            let c = self.document.canvas_size;
+            self.viewport.set_canvas_size(c.width, c.height);
             self.auto_fit = true;
             self.viewport.fit();
         }
+        let d = &self.document;
         self.status = format!(
             "Canvas {}×{} → output {}×{}, {}",
             d.canvas_size.width,

@@ -77,6 +77,7 @@ pub enum EditLabel {
     FlipHorizontal,
     FlipVertical,
     RasterizeLayer,
+    ClearSelection,
 }
 
 impl EditLabel {
@@ -109,6 +110,7 @@ impl EditLabel {
             EditLabel::FlipHorizontal => "Flip Horizontal",
             EditLabel::FlipVertical => "Flip Vertical",
             EditLabel::RasterizeLayer => "Rasterize Layer",
+            EditLabel::ClearSelection => "Clear Selection",
         }
     }
 }
@@ -374,11 +376,17 @@ pub enum EditCommand {
     /// Turn the selected image layer into a paint layer (see
     /// [`crate::rasterize_ops`]).
     RasterizeLayer,
+    /// Select the whole canvas (see [`crate::select_ops`]).
+    SelectAll,
+    /// Drop the selection.
+    Deselect,
+    /// Erase the selected pixels of the selected layer (Delete).
+    Clear,
 }
 
 impl EditCommand {
     /// Every command, in Edit-menu order.
-    pub const ALL: [EditCommand; 7] = [
+    pub const ALL: [EditCommand; 10] = [
         EditCommand::Undo,
         EditCommand::Redo,
         EditCommand::Paste,
@@ -386,6 +394,9 @@ impl EditCommand {
         EditCommand::FlipHorizontal,
         EditCommand::FlipVertical,
         EditCommand::RasterizeLayer,
+        EditCommand::SelectAll,
+        EditCommand::Deselect,
+        EditCommand::Clear,
     ];
 
     /// GPUI keystroke strings bound to the command (possibly none); the
@@ -396,9 +407,25 @@ impl EditCommand {
             EditCommand::Redo => &["ctrl-shift-z", "ctrl-y"],
             EditCommand::Paste => &["ctrl-v"],
             EditCommand::DuplicateLayer => &["ctrl-j"],
+            EditCommand::SelectAll => &["ctrl-a"],
+            EditCommand::Deselect => &["ctrl-d"],
+            // Delete and Backspace are plain keys, handled by the view's
+            // key handler (not while renaming a layer).
             EditCommand::FlipHorizontal
             | EditCommand::FlipVertical
-            | EditCommand::RasterizeLayer => &[],
+            | EditCommand::RasterizeLayer
+            | EditCommand::Clear => &[],
+        }
+    }
+
+    /// Shortcut shown in the Edit menu, if any.
+    pub fn shortcut_hint(self) -> Option<String> {
+        match self {
+            EditCommand::Clear => Some("Delete".into()),
+            _ => self
+                .keystrokes()
+                .first()
+                .map(|k| crate::state::shortcut_label(k)),
         }
     }
 
@@ -411,12 +438,18 @@ impl EditCommand {
             EditCommand::FlipHorizontal => "Flip Horizontal",
             EditCommand::FlipVertical => "Flip Vertical",
             EditCommand::RasterizeLayer => "Rasterize Layer",
+            EditCommand::SelectAll => "Select All",
+            EditCommand::Deselect => "Deselect",
+            EditCommand::Clear => "Clear",
         }
     }
 
     /// Whether the Edit menu draws a separator below this entry.
     pub const fn separator_after(self) -> bool {
-        matches!(self, EditCommand::Redo | EditCommand::Paste)
+        matches!(
+            self,
+            EditCommand::Redo | EditCommand::Paste | EditCommand::RasterizeLayer
+        )
     }
 
     /// Menu label: `Undo Brush Stroke`, or just `Undo` with nothing to undo.
@@ -514,7 +547,25 @@ impl EditorState {
                 self.layer_command(|s| s.flip_selected_layer(FlipAxis::Vertical))
             }
             EditCommand::RasterizeLayer => self.layer_command(|s| s.rasterize_selected_layer()),
+            EditCommand::SelectAll => self.selection_command(|s| {
+                s.select_all();
+                false
+            }),
+            EditCommand::Deselect => self.selection_command(|s| {
+                s.deselect();
+                false
+            }),
+            EditCommand::Clear => self.layer_command(|s| s.clear_selected()),
         }
+    }
+
+    /// A selection command (not a document edit): nothing while a dialog
+    /// is open.
+    fn selection_command(&mut self, f: impl FnOnce(&mut Self) -> bool) -> bool {
+        if self.history_blocked() {
+            return false;
+        }
+        f(self)
     }
 
     /// A layer command from the Edit menu or a key: nothing while a dialog
@@ -566,6 +617,7 @@ impl EditorState {
         self.content = applied.content;
         self.doc_version = self.doc_version.wrapping_add(1);
         self.fix_selection();
+        self.drop_stale_selection();
         let s = self.document.canvas_size;
         if s != canvas {
             self.viewport.set_canvas_size(s.width, s.height);

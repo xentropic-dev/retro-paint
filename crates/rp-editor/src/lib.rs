@@ -34,6 +34,7 @@ pub mod project_ops;
 pub mod rasterize_ops;
 pub mod render_worker;
 pub mod ribbon_icons;
+pub mod select_ops;
 pub mod state;
 pub mod swatch_ops;
 mod swatches_panel;

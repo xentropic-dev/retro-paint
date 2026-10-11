@@ -64,7 +64,12 @@ All shortcuts go to the editor window.
 | Ctrl+wheel | Zoom about the cursor |
 | Wheel | Scroll the canvas |
 | Space+drag, middle-drag | Pan |
-| `S` / `M` / `B` / `E` / `I` | Select / Move / Brush / Eraser / Picker tool |
+| `S` / `L` / `R` / `M` / `B` / `E` / `I` | Select / Lasso / Rect Select / Move / Brush / Eraser / Picker tool |
+| Ctrl+A / Ctrl+D | Select all / Deselect |
+| Delete or Backspace | Erase the selected pixels of the selected layer (Edit > Clear) |
+| Shift / Alt at the start of a selection | Add to / subtract from the selection |
+| Shift during a Rect Select drag | Square the rectangle |
+| Enter / Escape (Lasso) | Close / cancel the outline being drawn |
 | `[` / `]` | Brush size down / up |
 | `X` | Swap foreground and background colors |
 | `D` | Reset colors to black on white |
@@ -78,7 +83,7 @@ All shortcuts go to the editor window.
 
 `[`, `]`, `X`, `D` and the tool letters work only with no Ctrl or Alt held (`X`, `D` and the tool letters also not with Shift), and never while typing a layer name or inside a dialog. Undo and redo do nothing while a dialog is open.
 
-Mouse: with Brush, the left button paints the foreground color and the right button the background color. With Picker, left sets the foreground and right the background. Click the foreground or background chip at the ribbon's right end to open the color picker for it; Swatches' **+ New color…** opens it to make a new swatch. In Swatches, click sets the foreground, right-click the background, middle-click removes the swatch. Double-click a layer to rename it. The ribbon's buttons are icons; hover one to see its name and shortcut.
+Mouse: with Brush, the left button paints the foreground color and the right button the background color. With Picker, left sets the foreground and right the background. With Rect Select, drag a rectangle. With Lasso, drag a freehand outline (it closes when you let go), or click to place straight segments (drags between clicks add freehand pieces) and finish with a double-click, Enter or a click on the first point. Click the foreground or background chip at the ribbon's right end to open the color picker for it; Swatches' **+ New color…** opens it to make a new swatch. In Swatches, click sets the foreground, right-click the background, middle-click removes the swatch. Double-click a layer to rename it. The ribbon's buttons are icons; hover one to see its name and shortcut.
 
 ## Files
 

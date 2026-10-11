@@ -19,6 +19,7 @@ use gpui::{
 use crate::canvas_image::{CHECKER, SharpTile, checkerboard_bgra, plan_sharp_tile, upscale_tile};
 use crate::paint_ops::FrameView;
 use crate::render_worker::CanvasFrame;
+use crate::select_ops::SelectionOverlay;
 use crate::transform_ops::{HANDLE_SIZE, HandleLayout};
 use crate::viewport::{Vec2, Viewport};
 
@@ -51,6 +52,8 @@ pub(crate) struct CanvasPaint {
     /// Select-tool transform handles (canvas-area coordinates), drawn over
     /// the canvas.
     pub(crate) handles: Option<HandleLayout>,
+    /// Selection edge and the outline being drawn (canvas-area coordinates).
+    pub(crate) selection: Option<SelectionOverlay>,
 }
 
 fn render_image(width: u32, height: u32, bgra: Vec<u8>) -> Arc<RenderImage> {
@@ -165,6 +168,7 @@ impl CanvasCache {
             image,
             stale: std::mem::take(&mut self.stale),
             handles: None,
+            selection: None,
         }
     }
 }
@@ -180,6 +184,11 @@ pub(crate) fn paint(p: CanvasPaint, window: &mut Window) {
             let _ = window.paint_image(visible, bounds, Corners::default(), image, 0, false);
         }
     }
+    if let Some(sel) = &p.selection {
+        window.with_content_mask(Some(ContentMask { bounds: p.area }), |window| {
+            paint_selection(sel, p.area.origin, window);
+        });
+    }
     if let Some(h) = p.handles {
         window.with_content_mask(Some(ContentMask { bounds: p.area }), |window| {
             paint_handles(&h, p.area.origin, window);
@@ -193,6 +202,61 @@ pub(crate) fn paint(p: CanvasPaint, window: &mut Window) {
 /// Handle outline (dark) and fill (light) colors: visible on any image.
 const HANDLE_DARK: u32 = 0x111111;
 const HANDLE_LIGHT: u32 = 0xf0f0f0;
+
+/// The selection edge as 1 px dark lines with light dashes, then the outline
+/// being drawn (light over dark, like the handles) and the lasso's close
+/// marker. Widths are screen pixels at any zoom.
+fn paint_selection(o: &SelectionOverlay, origin: gpui::Point<Pixels>, window: &mut Window) {
+    let at = |v: Vec2| point(origin.x + px(v.x), origin.y + px(v.y));
+    let line = |r: &crate::select_ops::ScreenRun, from: f32, len: f32| {
+        if r.horizontal {
+            rect((r.x + from, r.y - 0.5), len, 1.0)
+        } else {
+            rect((r.x - 0.5, r.y + from), 1.0, len)
+        }
+    };
+    let ox = (f32::from(origin.x), f32::from(origin.y));
+    let shift = |b: Bounds<Pixels>| {
+        Bounds::new(point(b.origin.x + px(ox.0), b.origin.y + px(ox.1)), b.size)
+    };
+    for r in &o.runs {
+        window.paint_quad(fill(shift(line(r, 0.0, r.len)), rgb(HANDLE_DARK)));
+    }
+    for r in &o.runs {
+        for (from, len) in r.dashes() {
+            window.paint_quad(fill(shift(line(r, from, len)), rgb(HANDLE_LIGHT)));
+        }
+    }
+    if o.draft.len() >= 2 {
+        for (width, color) in [(3.0, HANDLE_DARK), (1.0, HANDLE_LIGHT)] {
+            let mut path = PathBuilder::stroke(px(width));
+            path.move_to(at(o.draft[0]));
+            for &p in &o.draft[1..] {
+                path.line_to(at(p));
+            }
+            if o.draft_closed {
+                path.close();
+            }
+            if let Ok(path) = path.build() {
+                window.paint_path(path, rgb(color));
+            }
+        }
+    }
+    if let Some(c) = o.close_marker {
+        let half = HANDLE_SIZE / 2.0;
+        window.paint_quad(quad(
+            Bounds::new(
+                at(Vec2::new(c.x - half, c.y - half)),
+                size(px(HANDLE_SIZE), px(HANDLE_SIZE)),
+            ),
+            px(half),
+            rgb(HANDLE_LIGHT),
+            px(1.),
+            rgb(HANDLE_DARK),
+            BorderStyle::default(),
+        ));
+    }
+}
 
 /// The transformed box, its corner handles and the rotation handle.
 fn paint_handles(h: &HandleLayout, origin: gpui::Point<Pixels>, window: &mut Window) {

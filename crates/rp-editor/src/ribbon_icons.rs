@@ -430,11 +430,7 @@ pub fn tool_key(key: &str, plain: bool) -> Option<Tool> {
     if !plain {
         return None;
     }
-    Tool::ALL
-        .into_iter()
-        // The lasso-tool feature binds L and R together with the tools' behavior.
-        .filter(|t| !matches!(t, Tool::Lasso | Tool::RectSelect))
-        .find(|&t| tool_shortcut(t) == key)
+    Tool::ALL.into_iter().find(|&t| tool_shortcut(t) == key)
 }
 
 /// Tooltip text: the name, then the shortcut in parentheses if there is one.
@@ -517,22 +513,15 @@ mod tests {
         assert_eq!(icons.len(), Tool::ALL.len());
         let keys: HashSet<_> = Tool::ALL.iter().map(|&t| tool_shortcut(t)).collect();
         assert_eq!(keys.len(), Tool::ALL.len());
-        for t in [
-            Tool::Select,
-            Tool::Move,
-            Tool::Brush,
-            Tool::Eraser,
-            Tool::Picker,
-        ] {
+        for t in Tool::ALL {
             assert_eq!(tool_key(tool_shortcut(t), true), Some(t));
             assert_eq!(tool_key(tool_shortcut(t), false), None);
         }
         // Must not steal the color keys.
         assert_eq!(tool_key("x", true), None);
         assert_eq!(tool_key("d", true), None);
-        // Not bound yet (lasso-tool binds them).
-        assert_eq!(tool_key("l", true), None);
-        assert_eq!(tool_key("r", true), None);
+        assert_eq!(tool_key("l", true), Some(Tool::Lasso));
+        assert_eq!(tool_key("r", true), Some(Tool::RectSelect));
     }
 
     #[test]
