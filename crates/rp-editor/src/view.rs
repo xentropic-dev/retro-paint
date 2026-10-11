@@ -14,7 +14,7 @@ use crate::canvas_view::{self, CanvasCache};
 use crate::file_dialog::FileDialog;
 use crate::file_flow::handle_outcome;
 use crate::filter_panel::FilterPanel;
-use crate::insert_flow::insert_image_files;
+use crate::insert_flow::{insert_image_files, paste_from_clipboard};
 use crate::layers_panel::LayersPanel;
 use crate::paint_ops::{BrushTip, MAX_BRUSH_SIZE, MIN_BRUSH_SIZE, PaintButton};
 use crate::panel_layout::{PanelSection, PanelSections};
@@ -45,7 +45,8 @@ actions!(
         ActualSize,
         FitCanvas,
         Undo,
-        Redo
+        Redo,
+        Paste
     ]
 );
 
@@ -68,6 +69,7 @@ pub fn bind_keys(cx: &mut App) {
         cx.bind_keys(cmd.keystrokes().iter().map(|&k| match cmd {
             EditCommand::Undo => KeyBinding::new(k, Undo, None),
             EditCommand::Redo => KeyBinding::new(k, Redo, None),
+            EditCommand::Paste => KeyBinding::new(k, Paste, None),
         }));
     }
     for cmd in ViewCommand::ALL {
@@ -292,6 +294,9 @@ impl EditorView {
     fn on_redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
         self.edit(cx, |s| s.edit_command(EditCommand::Redo));
     }
+    fn on_paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
+        paste_from_clipboard(&self.state, cx);
+    }
 
     fn menu_bar(&self, cx: &mut Context<Self>) -> Div {
         let state = self.state.read(cx);
@@ -343,12 +348,19 @@ impl EditorView {
             menu = menu.child(if enabled {
                 item.cursor_pointer()
                     .hover(|s| s.bg(rgb(ACCENT)))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.edit(cx, |s| s.edit_command(cmd));
+                    .on_click(cx.listener(move |this, _, _, cx| match cmd {
+                        // The clipboard read needs GPUI; it starts the paste.
+                        EditCommand::Paste => paste_from_clipboard(&this.state, cx),
+                        _ => {
+                            this.edit(cx, |s| s.edit_command(cmd));
+                        }
                     }))
             } else {
                 item.text_color(rgb(TEXT_DIM))
             });
+            if cmd.separator_after() {
+                menu = menu.child(div().my_1().h(px(1.)).bg(rgb(0x444444)));
+            }
         }
         menu
     }
@@ -393,6 +405,15 @@ impl EditorView {
                 },
             )));
         }
+        // Photobash input next to the tools: the same portal dialog as
+        // File > Insert Image… (Ctrl+V pastes).
+        tools = tools.child(div().ml_2().child(
+            ribbon_button("insert-image".into(), "Insert Image", false).on_click(cx.listener(
+                |this, _, window, cx| {
+                    this.run(FileCommand::InsertImage, window, cx);
+                },
+            )),
+        ));
         // Wraps onto a second line instead of clipping in narrow windows.
         div()
             .flex()
@@ -934,6 +955,7 @@ impl Render for EditorView {
             .on_action(cx.listener(Self::on_new))
             .on_action(cx.listener(Self::on_open))
             .on_action(cx.listener(Self::on_insert_image))
+            .on_action(cx.listener(Self::on_paste))
             .on_action(cx.listener(Self::on_save))
             .on_action(cx.listener(Self::on_save_as))
             .on_action(cx.listener(Self::on_export_png))

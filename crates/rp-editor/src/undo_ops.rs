@@ -349,11 +349,14 @@ impl UndoHistory {
 pub enum EditCommand {
     Undo,
     Redo,
+    /// Paste an image or image files from the clipboard. The view reads the
+    /// clipboard (see `insert_flow::paste_from_clipboard`).
+    Paste,
 }
 
 impl EditCommand {
     /// Every command, in Edit-menu order.
-    pub const ALL: [EditCommand; 2] = [EditCommand::Undo, EditCommand::Redo];
+    pub const ALL: [EditCommand; 3] = [EditCommand::Undo, EditCommand::Redo, EditCommand::Paste];
 
     /// GPUI keystroke strings bound to the command; the first is shown in
     /// the menu.
@@ -361,6 +364,7 @@ impl EditCommand {
         match self {
             EditCommand::Undo => &["ctrl-z"],
             EditCommand::Redo => &["ctrl-shift-z", "ctrl-y"],
+            EditCommand::Paste => &["ctrl-v"],
         }
     }
 
@@ -368,7 +372,13 @@ impl EditCommand {
         match self {
             EditCommand::Undo => "Undo",
             EditCommand::Redo => "Redo",
+            EditCommand::Paste => "Paste",
         }
+    }
+
+    /// Whether the Edit menu draws a separator below this entry.
+    pub const fn separator_after(self) -> bool {
+        matches!(self, EditCommand::Redo)
     }
 
     /// Menu label: `Undo Brush Stroke`, or just `Undo` with nothing to undo.
@@ -376,6 +386,7 @@ impl EditCommand {
         let step = match self {
             EditCommand::Undo => history.undo_label(),
             EditCommand::Redo => history.redo_label(),
+            EditCommand::Paste => None,
         };
         match step {
             Some(l) => format!("{} {}", self.verb(), l.label()),
@@ -388,6 +399,7 @@ impl EditCommand {
         match self {
             EditCommand::Undo => history.can_undo(),
             EditCommand::Redo => history.can_redo(),
+            EditCommand::Paste => true,
         }
     }
 }
@@ -448,11 +460,14 @@ impl EditorState {
     }
 
     /// Runs an Edit-menu command (or its key binding). Closes the menus.
+    /// Paste only starts here ([`begin_paste`](Self::begin_paste)); the view
+    /// reads the clipboard and finishes it.
     pub fn edit_command(&mut self, cmd: EditCommand) -> bool {
         self.close_menus();
         match cmd {
             EditCommand::Undo => self.undo(),
             EditCommand::Redo => self.redo(),
+            EditCommand::Paste => self.begin_paste(),
         }
     }
 
@@ -475,6 +490,7 @@ impl EditorState {
             self.status = match cmd {
                 EditCommand::Undo => "Nothing to undo".into(),
                 EditCommand::Redo => "Nothing to redo".into(),
+                EditCommand::Paste => unreachable!("paste is not a history step"),
             };
             return false;
         }
@@ -483,6 +499,7 @@ impl EditorState {
         let applied = match cmd {
             EditCommand::Undo => self.history.undo(&mut self.document),
             EditCommand::Redo => self.history.redo(&mut self.document),
+            EditCommand::Paste => unreachable!("paste is not a history step"),
         };
         let Some(applied) = applied else {
             self.status = "Undo history was out of step with the document and was cleared".into();
@@ -1071,6 +1088,10 @@ mod tests {
         assert!(!st.edit_command(redo));
         assert_eq!(EditCommand::Undo.keystrokes(), ["ctrl-z"]);
         assert_eq!(EditCommand::Redo.keystrokes(), ["ctrl-shift-z", "ctrl-y"]);
+        assert_eq!(EditCommand::Paste.keystrokes(), ["ctrl-v"]);
+        assert_eq!(EditCommand::Paste.menu_label(&st.history), "Paste");
+        assert!(EditCommand::Paste.enabled(&st.history));
+        assert!(EditCommand::Redo.separator_after());
     }
 
     #[test]
