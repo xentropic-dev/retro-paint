@@ -17,18 +17,24 @@ debug = "line-tables-only"
 # The pixel hot paths (flatten, dither, brush stamping, canvas upload) run
 # ~20x slower unoptimized, which makes painting lag, so debug builds
 # optimize the workspace crates that hold them too. The binary and rp-format
-# stay at opt-level 0.
+# stay at opt-level 0. Overflow checks are off in these crates too: in the
+# per-pixel loops they cost as much as the arithmetic (release builds never
+# had them).
 [profile.dev.package.rp-palette-dither]
 opt-level = 3
+overflow-checks = false
 
 [profile.dev.package.rp-doc]
 opt-level = 3
+overflow-checks = false
 
 [profile.dev.package.rp-brush]
 opt-level = 3
+overflow-checks = false
 
 [profile.dev.package.rp-editor]
 opt-level = 2
+overflow-checks = false
 
 [workspace.dependencies]
 rp-palette-dither = { path = "crates/rp-palette-dither" }

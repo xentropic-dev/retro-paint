@@ -33,7 +33,6 @@
 //!   [`THUMB_SIDE`]² (aspect kept), recomputed only when the document
 //!   version changes.
 
-use rp_brush::Brush;
 use rp_doc::{GrayImage, LayerId};
 
 use crate::state::EditorState;
@@ -56,46 +55,9 @@ pub const MASK_SHOW: u8 = 255;
 /// Longest side of a mask thumbnail, in pixels.
 pub const THUMB_SIDE: u32 = 40;
 
-/// Moves mask values under one dab of `brush`'s mask toward `value` by the
-/// brush coverage × `opacity`, with the same placement as
-/// [`rp_brush::stamp`]. Pixels outside the buffer are clipped.
-#[allow(clippy::too_many_arguments)]
-pub fn mask_dab(
-    dst: &mut [u8],
-    width: u32,
-    height: u32,
-    brush: &Brush,
-    cx: f32,
-    cy: f32,
-    value: u8,
-    opacity: f32,
-) {
-    assert_eq!(dst.len(), width as usize * height as usize);
-    let m = &brush.mask;
-    let x0 = cx.floor() as i64 - (m.width / 2) as i64;
-    let y0 = cy.floor() as i64 - (m.height / 2) as i64;
-    let opacity = opacity.clamp(0.0, 1.0);
-    let target = value as f32;
-    for my in 0..m.height {
-        let y = y0 + my as i64;
-        if y < 0 || y >= height as i64 {
-            continue;
-        }
-        for mx in 0..m.width {
-            let x = x0 + mx as i64;
-            if x < 0 || x >= width as i64 {
-                continue;
-            }
-            let a = m.data[(my * m.width + mx) as usize] as f32 / 255.0 * opacity;
-            if a <= 0.0 {
-                continue;
-            }
-            let i = y as usize * width as usize + x as usize;
-            let v = dst[i] as f32;
-            dst[i] = (v + (target - v) * a).round() as u8;
-        }
-    }
-}
+/// Mask dabs: the fast, byte-identical [`rp_brush::mask_dab`] (moves mask
+/// values under one dab toward `value` by coverage × opacity).
+pub use rp_brush::mask_dab;
 
 /// `mask` moved by `(dx, dy)` pixels, same size: values moved past an edge
 /// are dropped, the uncovered area is [`MASK_SHOW`].
@@ -271,6 +233,7 @@ impl EditorState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rp_brush::Brush;
     use rp_doc::Size;
 
     fn gray(size: Size, f: impl Fn(u32, u32) -> u8) -> GrayImage {
