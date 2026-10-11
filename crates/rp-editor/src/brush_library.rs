@@ -149,6 +149,9 @@ pub struct BrushLibrary {
     prepared: Vec<(BrushKey, Arc<Brush>)>,
     /// Bumps whenever entries or thumbnails change (view caches key on it).
     version: u64,
+    /// Notes (failed files, dropped saved paths) repeated in the next
+    /// "Loaded …" status, so they are not lost behind it.
+    notes: Vec<String>,
 }
 
 impl Default for BrushLibrary {
@@ -181,6 +184,7 @@ impl BrushLibrary {
             pending: None,
             prepared: Vec::new(),
             version: 0,
+            notes: Vec::new(),
         }
     }
 
@@ -271,30 +275,34 @@ impl BrushLibrary {
                 self.version += 1;
                 None
             }
-            LoadEvent::Failed { file, error } => Some(format!(
-                "Can't load brushes from {}: {error}",
-                display_file(&file)
-            )),
+            LoadEvent::Failed { file, error } => {
+                let msg = format!("can't load {}: {error}", display_file(&file));
+                self.notes.push(msg.clone());
+                Some(format!("Brushes: {msg}"))
+            }
             LoadEvent::Finished {
                 files,
                 brushes,
                 missing,
             } => {
-                let missing_note = if missing.is_empty() {
-                    String::new()
-                } else {
+                if !missing.is_empty() {
                     self.roots.retain(|r| !missing.contains(r));
-                    format!(
-                        "; dropped {} missing path{}",
+                    self.notes.push(format!(
+                        "dropped {} missing path{}",
                         missing.len(),
                         plural(missing.len())
-                    )
-                };
-                Some(format!(
-                    "Loaded {brushes} brush{} from {files} file{}{missing_note}",
+                    ));
+                }
+                let mut msg = format!(
+                    "Loaded {brushes} brush{} from {files} file{}",
                     if brushes == 1 { "" } else { "es" },
                     plural(files)
-                ))
+                );
+                for n in self.notes.drain(..) {
+                    msg.push_str("; ");
+                    msg.push_str(&n);
+                }
+                Some(msg)
             }
         }
     }
@@ -405,6 +413,29 @@ impl EditorState {
         })
     }
 
+    /// Startup: the saved roots that still exist, and the note about the
+    /// ones that were dropped (shown now and repeated in the "Loaded …"
+    /// status). Returns the load job (nothing to save: the config file is
+    /// already up to date).
+    pub fn restore_brush_roots(
+        &mut self,
+        kept: Vec<PathBuf>,
+        note: Option<String>,
+    ) -> Option<AddJob> {
+        let job = if kept.is_empty() {
+            None
+        } else {
+            self.add_brush_roots(kept)
+        };
+        if let Some(note) = note {
+            self.status = note.clone();
+            if job.is_some() {
+                self.brushes.notes.push(note);
+            }
+        }
+        job
+    }
+
     /// Applies one event from the off-thread brush loader.
     pub fn brush_load_event(&mut self, event: LoadEvent) {
         if let Some(msg) = self.brushes.apply(event) {
@@ -502,6 +533,36 @@ mod tests {
         assert_eq!(lib.roots(), [PathBuf::from("/x")]);
         assert!(msg.contains("3 brushes from 1 file"), "{msg}");
         assert!(msg.contains("dropped 1 missing path"), "{msg}");
+    }
+
+    #[test]
+    fn notes_survive_into_the_loaded_status() {
+        let mut st = EditorState::new();
+        let job = st.restore_brush_roots(vec!["/kept".into()], Some("Brush path /gone".into()));
+        assert!(job.is_some());
+        assert_eq!(st.status, "Brush path /gone");
+        st.brush_load_event(LoadEvent::Failed {
+            file: "/kept/bad.abr".into(),
+            error: "truncated".into(),
+        });
+        assert!(st.status.contains("bad.abr"), "{}", st.status);
+        st.brush_load_event(LoadEvent::Finished {
+            files: 0,
+            brushes: 0,
+            missing: vec![],
+        });
+        assert!(
+            st.status.contains("bad.abr") && st.status.contains("/gone"),
+            "{}",
+            st.status
+        );
+        // Nothing kept: just the note, no job.
+        let mut st = EditorState::new();
+        assert!(
+            st.restore_brush_roots(vec![], Some("gone".into()))
+                .is_none()
+        );
+        assert_eq!(st.status, "gone");
     }
 
     #[test]

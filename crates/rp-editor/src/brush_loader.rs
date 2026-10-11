@@ -365,6 +365,45 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
     }
 
+    /// Timing check against real brush packs (not in the repo):
+    /// `RP_BRUSH_DIR=~/brushes cargo test -p rp-editor real_brush_dir -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn real_brush_dir_load_timing() {
+        use std::time::Instant;
+        let Some(dir) = std::env::var_os("RP_BRUSH_DIR") else {
+            return;
+        };
+        let t = Instant::now();
+        let mut lib = BrushLibrary::new();
+        let mut first_index = None;
+        run_load(&[PathBuf::from(dir)], &[], |ev| {
+            if matches!(ev, LoadEvent::Indexed { .. }) && first_index.is_none() {
+                first_index = Some(t.elapsed());
+            }
+            if let Some(m) = lib.apply(ev) {
+                eprintln!("{:>8.2?} {m}", t.elapsed());
+            }
+            true
+        });
+        eprintln!(
+            "first entries after {:.2?}, all thumbnails after {:.2?}",
+            first_index.unwrap_or_default(),
+            t.elapsed()
+        );
+        let mut worst = std::time::Duration::ZERO;
+        for e in lib.entries() {
+            let t = Instant::now();
+            let b = prepare_brush(&e.brush.data).unwrap();
+            worst = worst.max(t.elapsed());
+            assert!(b.mask.width.max(b.mask.height) <= 1024);
+        }
+        eprintln!(
+            "{} brushes; slowest select (decode + working base) {worst:.2?}",
+            lib.entries().len()
+        );
+    }
+
     #[test]
     fn loader_stops_when_nobody_listens() {
         let d = temp_dir("stop");

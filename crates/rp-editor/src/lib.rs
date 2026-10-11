@@ -12,8 +12,10 @@
 //! UI thread never flattens.
 
 pub mod brush_config;
+mod brush_flow;
 pub mod brush_library;
 pub mod brush_loader;
+mod brushes_panel;
 pub mod canvas_image;
 mod canvas_view;
 mod color_picker;

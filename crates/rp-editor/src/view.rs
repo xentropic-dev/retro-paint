@@ -2,14 +2,16 @@
 //! status bar. Thin: every decision goes through [`EditorState`].
 
 use gpui::{
-    App, Context, Div, Entity, ExternalPaths, FocusHandle, KeyBinding, KeyDownEvent, KeyUpEvent,
-    ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    Point, Rgba, ScrollDelta, ScrollWheelEvent, SharedString, Stateful, Window, actions, canvas,
-    div, point, prelude::*, px, rgb, svg,
+    AnyView, App, Context, Div, Entity, ExternalPaths, FocusHandle, KeyBinding, KeyDownEvent,
+    KeyUpEvent, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    Pixels, Point, Rgba, ScrollDelta, ScrollWheelEvent, SharedString, Stateful, Window, actions,
+    canvas, div, img, point, prelude::*, px, rgb, svg,
 };
 use rp_doc::Tool;
 use rp_palette_dither::Rgb;
 
+use crate::brush_flow::restore_saved_brushes;
+use crate::brushes_panel::{BrushesPanel, fit};
 use crate::canvas_view::{self, CanvasCache};
 use crate::color_picker::ColorPickerDialog;
 use crate::color_picker_ops::PickerTarget;
@@ -18,7 +20,7 @@ use crate::file_flow::handle_outcome;
 use crate::filter_panel::FilterPanel;
 use crate::insert_flow::{insert_image_files, paste_from_clipboard};
 use crate::layers_panel::LayersPanel;
-use crate::paint_ops::{BrushTip, MAX_BRUSH_SIZE, MIN_BRUSH_SIZE, PaintButton};
+use crate::paint_ops::{BrushTip, MIN_BRUSH_SIZE, PaintButton};
 use crate::panel_layout::{PanelSection, PanelSections};
 use crate::project_dialog::ProjectDialog;
 use crate::render_worker::{
@@ -148,6 +150,8 @@ pub(crate) struct EditorView {
     layers_panel: Entity<LayersPanel>,
     filter_panel: Entity<FilterPanel>,
     swatches_panel: Entity<SwatchesPanel>,
+    /// Also caches the brush thumbnail images the ribbon shows.
+    brushes_panel: Entity<BrushesPanel>,
     project_dialog: Entity<ProjectDialog>,
     color_picker: Entity<ColorPickerDialog>,
     file_dialog: Entity<FileDialog>,
@@ -184,6 +188,8 @@ impl EditorView {
         let swatches_panel =
             cx.new(|cx| SwatchesPanel::new(state.clone(), color_picker.clone(), cx));
         let file_dialog = cx.new(|cx| FileDialog::new(state.clone(), focus.clone(), cx));
+        let brushes_panel = cx.new(|cx| BrushesPanel::new(state.clone(), cx));
+        restore_saved_brushes(&state, cx);
         // The window's close button asks about unsaved changes like Quit.
         let (close_state, close_dialog) = (state.clone(), file_dialog.clone());
         window.on_window_should_close(cx, move |window, cx| {
@@ -202,6 +208,7 @@ impl EditorView {
             layers_panel,
             filter_panel,
             swatches_panel,
+            brushes_panel,
             project_dialog,
             color_picker,
             file_dialog,
@@ -566,10 +573,43 @@ impl EditorView {
         }
     }
 
-    /// Brush size stepper (`[` / `]`) and the Hard/Soft tip toggle.
+    /// The current brush's thumbnail (name in its tooltip), the size
+    /// stepper (`[` / `]`) and the Hard/Soft tip toggle (round brushes only).
     fn brush_controls(&self, cx: &mut Context<Self>) -> Div {
-        let brush = &self.state.read(cx).brush;
-        let (size, tip) = (brush.size(), brush.tip());
+        let s = self.state.read(cx);
+        let brush = &s.brush;
+        let (size, tip, round, max) = (
+            brush.size(),
+            brush.tip(),
+            brush.is_round(),
+            brush.max_size(),
+        );
+        let name = brush.name().to_string();
+        let key = s.brushes.selected().clone();
+        let thumb = s.brushes.entry(&key).and_then(|e| e.thumb.clone());
+        let thumb = thumb.map(|mask| {
+            let image = self.brushes_panel.update(cx, |p, _| p.image(&key, &mask));
+            let (w, h) = fit(mask.width, mask.height, ICON_BUTTON_PX - 6.);
+            img(image).w(px(w)).h(px(h))
+        });
+        let current = div()
+            .id("brush-current")
+            .w(px(ICON_BUTTON_PX))
+            .h(px(ICON_BUTTON_PX))
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .rounded_sm()
+            .border_1()
+            .border_color(rgb(0x404040))
+            .bg(rgb(0x1a1a1a))
+            .tooltip(text_tooltip(format!("Brush: {name}")))
+            .children(thumb)
+            .on_click(cx.listener(|this, _, _, cx| {
+                // Opens the Brushes section if it was collapsed.
+                this.edit(cx, |s| s.panels.set_collapsed(PanelSection::Brushes, false));
+            }));
         let mut tips = div().flex().flex_row().gap_1();
         for t in [BrushTip::Hard, BrushTip::Soft] {
             let icon = match t {
@@ -581,8 +621,8 @@ impl EditorView {
                     SharedString::from(format!("tip-{t:?}")),
                     icon,
                     tooltip_text(&format!("{} brush", t.label()), None),
-                    tip == t,
-                    true,
+                    round && tip == t,
+                    round,
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.edit(cx, |s| s.set_brush_tip(t));
@@ -595,6 +635,7 @@ impl EditorView {
             .items_center()
             .gap_1()
             .text_sm()
+            .child(current)
             .child(div().text_color(rgb(TEXT_DIM)).child("Size"))
             .child(
                 icon_button(
@@ -622,7 +663,7 @@ impl EditorView {
                     Icon::SizeUp,
                     tooltip_text("Larger brush", Some("]")),
                     false,
-                    size < MAX_BRUSH_SIZE,
+                    size < max,
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.edit(cx, |s| s.brush_size_up());
@@ -895,6 +936,7 @@ impl EditorView {
                 PanelSection::Layers => body.child(self.layers_panel.clone()),
                 PanelSection::Filter => body.child(self.filter_panel.clone()),
                 PanelSection::Swatches => body.child(self.swatches_panel.clone()),
+                PanelSection::Brushes => body.child(self.brushes_panel.clone()),
             });
         }
         column
@@ -1025,10 +1067,7 @@ pub(crate) fn icon_button(
         .when(!selected, |d| {
             d.border_color(rgb(0x404040)).hover(|s| s.bg(rgb(BG_HOVER)))
         })
-        .tooltip(move |_, cx| {
-            let text = tooltip.clone();
-            cx.new(|_| RibbonTooltip(text)).into()
-        })
+        .tooltip(text_tooltip(tooltip))
         .child(
             svg()
                 .path(icon.path())
@@ -1038,7 +1077,15 @@ pub(crate) fn icon_button(
         )
 }
 
-/// Tooltip bubble for [`icon_button`].
+/// A tooltip builder showing `text` in a [`RibbonTooltip`] bubble.
+pub(crate) fn text_tooltip(
+    text: impl Into<SharedString>,
+) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+    let text: SharedString = text.into();
+    move |_, cx| cx.new(|_| RibbonTooltip(text.clone())).into()
+}
+
+/// Tooltip bubble for [`icon_button`] and the brush thumbnails.
 struct RibbonTooltip(SharedString);
 
 impl Render for RibbonTooltip {

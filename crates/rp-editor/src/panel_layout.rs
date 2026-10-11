@@ -8,14 +8,16 @@ pub enum PanelSection {
     Layers,
     Filter,
     Swatches,
+    Brushes,
 }
 
 impl PanelSection {
     /// Top-to-bottom order in the column.
-    pub const ALL: [PanelSection; 3] = [
+    pub const ALL: [PanelSection; 4] = [
         PanelSection::Layers,
         PanelSection::Filter,
         PanelSection::Swatches,
+        PanelSection::Brushes,
     ];
 
     /// Header title.
@@ -24,6 +26,7 @@ impl PanelSection {
             PanelSection::Layers => "Layers",
             PanelSection::Filter => "Filter",
             PanelSection::Swatches => "Swatches",
+            PanelSection::Brushes => "Brushes",
         }
     }
 
@@ -32,6 +35,7 @@ impl PanelSection {
             PanelSection::Layers => 0,
             PanelSection::Filter => 1,
             PanelSection::Swatches => 2,
+            PanelSection::Brushes => 3,
         }
     }
 }
@@ -40,7 +44,7 @@ impl PanelSection {
 /// the column scrolls as a whole when the window is too short.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct PanelSections {
-    collapsed: [bool; 3],
+    collapsed: [bool; 4],
 }
 
 impl PanelSections {
@@ -107,6 +111,6 @@ mod tests {
     #[test]
     fn titles_in_column_order() {
         let titles: Vec<_> = PanelSection::ALL.iter().map(|s| s.title()).collect();
-        assert_eq!(titles, ["Layers", "Filter", "Swatches"]);
+        assert_eq!(titles, ["Layers", "Filter", "Swatches", "Brushes"]);
     }
 }
