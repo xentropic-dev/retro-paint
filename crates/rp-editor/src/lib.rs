@@ -22,6 +22,8 @@ mod layers_panel;
 pub mod paint_ops;
 pub mod render_worker;
 pub mod state;
+pub mod swatch_ops;
+mod swatches_panel;
 pub mod transform_ops;
 mod view;
 pub mod viewport;

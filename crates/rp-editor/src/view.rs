@@ -19,6 +19,8 @@ use crate::render_worker::{
     CanvasReceiver, Overlay, RenderJob, Request, TIMING_ENV, WorkerClient, next_request,
 };
 use crate::state::{EditorState, FileCommand, Outcome, ViewCommand, shortcut_label, tool_label};
+use crate::swatch_ops::color_key;
+use crate::swatches_panel::SwatchesPanel;
 use crate::transform_ops::arrow_nudge;
 use crate::viewport::Vec2;
 
@@ -85,6 +87,8 @@ const PANEL_W: f32 = 260.;
 const LAYERS_MIN_H: f32 = 260.;
 /// Filter panel height when the window has room for it.
 const FILTER_H: f32 = 340.;
+/// Swatches panel height when the window has room for it.
+const SWATCHES_H: f32 = 140.;
 
 /// Runs `f` on the shared state and notifies its observers (every view that
 /// shows it). The single path for mutating [`EditorState`] from a view.
@@ -105,6 +109,7 @@ pub(crate) struct EditorView {
     pub(crate) state: Entity<EditorState>,
     layers_panel: Entity<LayersPanel>,
     filter_panel: Entity<FilterPanel>,
+    swatches_panel: Entity<SwatchesPanel>,
     focus: FocusHandle,
     worker: WorkerClient,
     /// What the render worker was last given: document version and overlay.
@@ -131,10 +136,12 @@ impl EditorView {
         .detach();
         let layers_panel = cx.new(|cx| LayersPanel::new(state.clone(), window, cx));
         let filter_panel = cx.new(|cx| FilterPanel::new(state.clone(), cx));
+        let swatches_panel = cx.new(|cx| SwatchesPanel::new(state.clone(), cx));
         let mut this = Self {
             state,
             layers_panel,
             filter_panel,
+            swatches_panel,
             focus,
             worker,
             sent: None,
@@ -338,11 +345,34 @@ impl EditorView {
             )
             .child(
                 div()
-                    .relative()
-                    .w(px(34.))
-                    .h(px(34.))
-                    .child(color_chip(doc.bg).absolute().right_0().bottom_0())
-                    .child(color_chip(doc.fg).absolute().left_0().top_0()),
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        div()
+                            .relative()
+                            .w(px(34.))
+                            .h(px(34.))
+                            .child(color_chip(doc.bg).absolute().right_0().bottom_0())
+                            .child(color_chip(doc.fg).absolute().left_0().top_0()),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .child(chip_button("swap-colors", "⇄").on_click(cx.listener(
+                                |this, _, _, cx| {
+                                    this.edit(cx, |s| s.swap_colors());
+                                },
+                            )))
+                            .child(chip_button("reset-colors", "◩").on_click(cx.listener(
+                                |this, _, _, cx| {
+                                    this.edit(cx, |s| s.reset_colors());
+                                },
+                            ))),
+                    ),
             )
     }
 
@@ -582,6 +612,11 @@ impl EditorView {
                 self.edit(cx, |s| s.space_held = true);
             }
             "[" if plain => self.edit(cx, |s| s.brush_size_down()),
+            key if s.renaming.is_none()
+                && let Some(c) = color_key(key, plain && !m.shift) =>
+            {
+                self.edit(cx, |s| s.color_key(c));
+            }
             "]" if plain => self.edit(cx, |s| s.brush_size_up()),
             _ => {}
         }
@@ -621,10 +656,13 @@ impl EditorView {
                     .child(self.filter_panel.clone()),
             )
             .child(
-                panel("Swatches", "No swatches".into())
-                    .h(px(110.))
-                    .min_h(px(40.))
-                    .overflow_hidden(),
+                div()
+                    .h(px(SWATCHES_H))
+                    .min_h(px(60.))
+                    .border_b_1()
+                    .border_color(rgb(BORDER))
+                    .overflow_hidden()
+                    .child(self.swatches_panel.clone()),
             )
     }
 
@@ -685,17 +723,38 @@ fn ribbon_button(id: SharedString, label: &'static str, selected: bool) -> State
         .child(label)
 }
 
-fn color_chip(c: Rgb) -> Div {
-    let color = Rgba {
+/// A full-color [`Rgb`] as a GPUI color.
+pub(crate) fn rgba(c: Rgb) -> Rgba {
+    Rgba {
         r: c.r as f32 / 255.,
         g: c.g as f32 / 255.,
         b: c.b as f32 / 255.,
         a: 1.,
-    };
+    }
+}
+
+/// Small square button next to the fg/bg chips (swap, reset).
+fn chip_button(id: &'static str, glyph: &'static str) -> Stateful<Div> {
+    div()
+        .id(id)
+        .w(px(16.))
+        .h(px(16.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_sm()
+        .text_xs()
+        .text_color(rgb(TEXT_DIM))
+        .cursor_pointer()
+        .hover(|s| s.bg(rgb(BG_HOVER)).text_color(rgb(TEXT)))
+        .child(glyph)
+}
+
+fn color_chip(c: Rgb) -> Div {
     div()
         .w(px(22.))
         .h(px(22.))
-        .bg(color)
+        .bg(rgba(c))
         .border_1()
         .border_color(rgb(0x9a9a9a))
 }
@@ -709,23 +768,6 @@ pub(crate) fn panel_header(title: &'static str) -> Div {
         .text_xs()
         .text_color(rgb(TEXT))
         .child(title)
-}
-
-fn panel(title: &'static str, placeholder: String) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .border_b_1()
-        .border_color(rgb(BORDER))
-        .child(panel_header(title))
-        .child(
-            div()
-                .flex_1()
-                .p_2()
-                .text_xs()
-                .text_color(rgb(TEXT_DIM))
-                .child(placeholder),
-        )
 }
 
 impl Render for EditorView {
