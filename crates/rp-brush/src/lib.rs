@@ -1,4 +1,4 @@
-//! GIMP .gbr and .vbr brushes and dab stamping.
+//! GIMP .gbr / .vbr / .gih and Photoshop .abr brushes, and dab stamping.
 //!
 //! A [`Brush`] is a grayscale coverage [`Mask`] (255 = full paint), an optional
 //! RGB pixmap for color brushes, and a spacing in percent of the brush size.
@@ -27,13 +27,40 @@
 //!
 //! [`Brush::round_hard`] and [`Brush::round_soft`] are built-in default
 //! brushes, so painting works without any brush files.
+//!
+//! # Brush files and the brush panel
+//!
+//! - [`load_library`] reads a path and returns every brush in it: one for a
+//!   `.gbr` / `.vbr`, the first cell of a `.gih` image hose, all sampled
+//!   brushes of a Photoshop `.abr`. [`load_library_bytes`] does the same for
+//!   bytes already in memory. Errors are [`BrushError`], with
+//!   [`BrushError::Io`] for a file that cannot be read.
+//! - `.abr` packs can be 75 MB of 5000 px samples, so a panel should not
+//!   decode them all up front. [`index_abr`] walks the file (well under a
+//!   millisecond for 132 brushes) and returns an [`AbrIndex`] whose
+//!   [`AbrEntry`]s carry name, spacing, size and the byte range of the
+//!   pixels. [`decode_abr`] turns one entry into a [`Brush`] (a few ms for a
+//!   5000 px sample); [`decode_abr_data`] does it from just
+//!   `file[entry.data]`, so a caller can drop the file bytes and re-read
+//!   only that range from disk. Index and decode are pure and safe to run on
+//!   a worker thread; malformed input returns an error, never panics.
+//! - [`thumbnail`] downscales a [`Mask`] with area averaging to at most
+//!   `max_side` px (e.g. 64) for panel previews; it never upscales.
+//! - Decoded `.abr` brushes are [`BrushSource::Bitmap`], so
+//!   [`Brush::resized`] area-averages them down to the painting size without
+//!   aliasing, always from the full-size sample.
 
+mod abr;
 mod gbr;
+mod library;
 mod resize;
 mod stamp;
 mod vbr;
 
+pub use abr::{AbrEntry, AbrIndex, decode_abr, decode_abr_data, index_abr, parse_abr};
 pub use gbr::parse_gbr;
+pub use library::{file_stem, load_library, load_library_bytes, parse_gih};
+pub use resize::thumbnail;
 pub use stamp::{Spacer, stamp, stroke_dabs};
 pub use vbr::{Shape, VbrParams, generate, parse_vbr};
 
@@ -165,6 +192,8 @@ pub enum BrushError {
     Unsupported(String),
     /// Malformed data.
     Invalid(String),
+    /// The file could not be read.
+    Io(String),
 }
 
 impl fmt::Display for BrushError {
@@ -173,6 +202,7 @@ impl fmt::Display for BrushError {
             BrushError::Truncated => write!(f, "brush data is truncated"),
             BrushError::Unsupported(s) => write!(f, "unsupported brush: {s}"),
             BrushError::Invalid(s) => write!(f, "invalid brush: {s}"),
+            BrushError::Io(s) => write!(f, "cannot read brush file: {s}"),
         }
     }
 }

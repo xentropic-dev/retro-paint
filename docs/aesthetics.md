@@ -41,7 +41,7 @@ The editor and DOS view are always two separate OS windows. With one screen, the
 - Layer selection panel, inspired by GIMP or Photoshop.
 - Reorder layers.
 - Insert images.
-- Apply a brush. v1 paints with a built-in round brush (Hard or Soft). `rp-brush` already reads GIMP `.gbr` (bitmap) and `.vbr` (parametric) brushes, but the editor has no way to load one yet.
+- Apply a brush. v1 paints with a built-in round brush (Hard or Soft). `rp-brush` already reads GIMP `.gbr` (bitmap), `.vbr` (parametric) and `.gih` (first cell) brushes and Photoshop `.abr` sampled brushes (v1/v2, v6/v10, with a cheap index pass and on-demand decode), but the editor has no way to load one yet.
 
 ### Panel column
 
