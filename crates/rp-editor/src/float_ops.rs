@@ -789,6 +789,25 @@ mod tests {
     }
 
     #[test]
+    fn invert_commits_a_float_and_the_box_sits_on_the_new_bounds() {
+        let mut st = editor();
+        st.nudge_selected(3, 0);
+        assert!(st.is_floating());
+        st.edit_command(EditCommand::InvertSelection);
+        assert!(!st.is_floating());
+        assert_eq!(px(&st, 9, 7), [0, 0, 255, 255], "float committed");
+        assert_eq!(st.history.undo_len(), 1, "invert adds no step");
+        // The moved square (8..18, 5..15) is now the hole.
+        let sel = st.selection.selection();
+        assert_eq!(sel.get(8, 5), 0);
+        assert_eq!(sel.get(7, 5), 255);
+        assert_eq!(sel.bounds(), Some(Rect::new(0, 0, 40, 30)));
+        let f = st.selection_frame().unwrap();
+        assert_eq!(f.corner(Corner::TopLeft), Vec2::new(0.0, 0.0));
+        assert_eq!(f.corner(Corner::BottomRight), Vec2::new(40.0, 30.0));
+    }
+
+    #[test]
     fn tool_layer_and_file_changes_commit() {
         let switches: [fn(&mut EditorState); 6] = [
             |s| s.select_tool(Tool::Brush),

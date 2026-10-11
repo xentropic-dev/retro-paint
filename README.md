@@ -66,6 +66,7 @@ All shortcuts go to the editor window.
 | Space+drag, middle-drag | Pan |
 | `S` / `L` / `R` / `M` / `B` / `E` / `I` | Select / Lasso / Rect Select / Move / Brush / Eraser / Picker tool |
 | Ctrl+A / Ctrl+D | Select all / Deselect |
+| Ctrl+Shift+I | Invert the selection (Edit > Invert Selection) |
 | Escape (on the canvas) | One step back: drop an unfinished outline, else cancel a transform (selection kept), else deselect |
 | Delete or Backspace | Erase the selected pixels of the selected layer (Edit > Clear) |
 | Ctrl+T | Transform the selection (Edit > Transform Selection): drag inside to move, corners scale, the knob rotates |

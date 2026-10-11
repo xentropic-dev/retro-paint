@@ -55,6 +55,7 @@ actions!(
         DuplicateLayer,
         SelectAll,
         Deselect,
+        InvertSelection,
         TransformSelection
     ]
 );
@@ -82,6 +83,7 @@ pub fn bind_keys(cx: &mut App) {
             EditCommand::DuplicateLayer => KeyBinding::new(k, DuplicateLayer, None),
             EditCommand::SelectAll => KeyBinding::new(k, SelectAll, None),
             EditCommand::Deselect => KeyBinding::new(k, Deselect, None),
+            EditCommand::InvertSelection => KeyBinding::new(k, InvertSelection, None),
             EditCommand::TransformSelection => KeyBinding::new(k, TransformSelection, None),
             EditCommand::FlipHorizontal
             | EditCommand::FlipVertical
@@ -339,6 +341,9 @@ impl EditorView {
     }
     fn on_deselect(&mut self, _: &Deselect, _: &mut Window, cx: &mut Context<Self>) {
         self.edit(cx, |s| s.edit_command(EditCommand::Deselect));
+    }
+    fn on_invert_selection(&mut self, _: &InvertSelection, _: &mut Window, cx: &mut Context<Self>) {
+        self.edit(cx, |s| s.edit_command(EditCommand::InvertSelection));
     }
     fn on_transform_selection(
         &mut self,
@@ -1200,6 +1205,7 @@ impl Render for EditorView {
             .on_action(cx.listener(Self::on_duplicate_layer))
             .on_action(cx.listener(Self::on_select_all))
             .on_action(cx.listener(Self::on_deselect))
+            .on_action(cx.listener(Self::on_invert_selection))
             .on_action(cx.listener(Self::on_transform_selection))
             .on_key_down(cx.listener(Self::on_key_down))
             .on_key_up(cx.listener(Self::on_key_up))

@@ -25,7 +25,10 @@
 //!   subtracts (Alt wins if both are held), otherwise the outline replaces
 //!   the selection.
 //! - **Ctrl+A** selects the whole canvas, **Ctrl+D** (Edit > Deselect)
-//!   clears it. Both drop an unfinished outline.
+//!   clears it, **Ctrl+Shift+I** (Edit > Invert Selection) inverts it by
+//!   coverage ([`Selection::invert`]; nothing ↔ everything). All three drop
+//!   an unfinished outline and commit a float first; Invert does nothing
+//!   while renaming a layer.
 //! - **Escape** goes one step per press: a dialog, the color picker, a
 //!   rename or a Project Settings field keeps it; else an unfinished outline
 //!   is dropped; else a float is cancelled (layer restored, selection kept);
@@ -585,6 +588,19 @@ impl EditorState {
         self.selection_status();
     }
 
+    /// Ctrl+Shift+I, Edit > Invert Selection: settles an open outline or
+    /// float first, then swaps selected and unselected by coverage. Not an
+    /// undo step. Does nothing while renaming a layer.
+    pub fn invert_selection(&mut self) {
+        if self.renaming.is_some() {
+            return;
+        }
+        self.settle_float();
+        self.selection.draft = None;
+        self.selection.update(|s| s.invert());
+        self.selection_status();
+    }
+
     fn selection_status(&mut self) {
         self.status = match self.selection.selection().bounds() {
             Some(b) => format!("Selection {}×{}", b.width, b.height),
@@ -740,6 +756,7 @@ pub fn fill_mask_selected(mask: &mut rp_doc::GrayImage, selection: &Selection) -
 mod tests {
     use super::*;
     use crate::state::FileCommand;
+    use crate::undo_ops::EditCommand;
     use crate::viewport::Vec2;
     use rp_doc::{Document, GrayImage, Layer, LayerKind, RgbaImage};
 
@@ -1016,6 +1033,87 @@ mod tests {
         st.select_all();
         assert!(st.undo());
         assert_eq!(st.selection.selection().size(), Size::new(10, 10));
+        assert!(st.selection.selection().is_empty());
+    }
+
+    #[test]
+    fn invert_selection_keeps_soft_edges_and_is_not_an_undo_step() {
+        let mut st = editor();
+        st.selection.update(|s| {
+            s.combine_polygon(
+                SelectMode::Replace,
+                &[[0.0, 0.0], [1.5, 0.0], [1.5, 30.0], [0.0, 30.0]],
+            )
+        });
+        assert_eq!(st.selection.selection().get(1, 3), 128);
+        let edges = st.selection.edges().clone();
+        assert_eq!(EditCommand::InvertSelection.verb(), "Invert Selection");
+        assert_eq!(
+            EditCommand::InvertSelection.shortcut_hint().as_deref(),
+            Some(crate::state::shortcut_label("ctrl-shift-i").as_str())
+        );
+        st.edit_command(EditCommand::InvertSelection);
+        let sel = st.selection.selection();
+        assert_eq!(sel.get(0, 3), 0);
+        assert_eq!(sel.get(1, 3), 127);
+        assert_eq!(sel.get(2, 3), 255);
+        assert_eq!(sel.bounds(), Some(Rect::new(1, 0, 39, 30)));
+        assert_ne!(st.selection.edges(), &edges, "edge cache refreshed");
+        assert_eq!(st.history.undo_len(), 0);
+        assert!(!st.is_dirty());
+        assert!(st.status.contains("39×30"), "{}", st.status);
+
+        // Empty inverts to all, all to empty.
+        st.deselect();
+        st.edit_command(EditCommand::InvertSelection);
+        assert_eq!(
+            st.selection.selection().bounds(),
+            Some(Rect::new(0, 0, 40, 30))
+        );
+        st.edit_command(EditCommand::InvertSelection);
+        assert!(st.selection.selection().is_empty());
+        assert!(st.selection.edges().is_empty());
+    }
+
+    #[test]
+    fn delete_after_invert_erases_outside_the_old_selection() {
+        let mut st = editor();
+        st.selection
+            .update(|s| s.combine_rect(SelectMode::Replace, Rect::new(4, 4, 6, 3)));
+        st.edit_command(EditCommand::InvertSelection);
+        assert!(st.clear_selected());
+        assert_eq!(alpha(&st, 4, 4), 255);
+        assert_eq!(alpha(&st, 9, 6), 255);
+        assert_eq!(alpha(&st, 10, 6), 0);
+        assert_eq!(alpha(&st, 0, 0), 0);
+        assert_eq!(alpha(&st, 39, 29), 0);
+        assert_eq!(st.history.undo_len(), 1);
+    }
+
+    #[test]
+    fn invert_drops_an_outline_and_waits_for_dialogs_and_rename() {
+        let mut st = editor();
+        st.select_tool(Tool::Lasso);
+        click(&mut st, 2.0, 2.0, 1);
+        click(&mut st, 9.0, 2.0, 1);
+        st.edit_command(EditCommand::InvertSelection);
+        assert!(st.selection.draft.is_none());
+        assert_eq!(
+            st.selection.selection().bounds(),
+            Some(Rect::new(0, 0, 40, 30))
+        );
+
+        let all = st.selection.selection().clone();
+        let id = st.document.layers()[0].id();
+        st.begin_rename(id);
+        st.edit_command(EditCommand::InvertSelection);
+        assert_eq!(st.selection.selection(), &all, "renaming");
+        st.cancel_rename();
+        st.open_project_settings();
+        st.edit_command(EditCommand::InvertSelection);
+        assert_eq!(st.selection.selection(), &all, "dialog open");
+        st.cancel_project_settings();
+        st.edit_command(EditCommand::InvertSelection);
         assert!(st.selection.selection().is_empty());
     }
 

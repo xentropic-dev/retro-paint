@@ -382,6 +382,8 @@ pub enum EditCommand {
     SelectAll,
     /// Drop the selection.
     Deselect,
+    /// Swap selected and unselected (coverage → 255 − coverage).
+    InvertSelection,
     /// Erase the selected pixels of the selected layer (Delete).
     Clear,
     /// Show the transform box on the selection (see
@@ -391,7 +393,7 @@ pub enum EditCommand {
 
 impl EditCommand {
     /// Every command, in Edit-menu order.
-    pub const ALL: [EditCommand; 11] = [
+    pub const ALL: [EditCommand; 12] = [
         EditCommand::Undo,
         EditCommand::Redo,
         EditCommand::Paste,
@@ -401,6 +403,7 @@ impl EditCommand {
         EditCommand::RasterizeLayer,
         EditCommand::SelectAll,
         EditCommand::Deselect,
+        EditCommand::InvertSelection,
         EditCommand::Clear,
         EditCommand::TransformSelection,
     ];
@@ -415,6 +418,8 @@ impl EditCommand {
             EditCommand::DuplicateLayer => &["ctrl-j"],
             EditCommand::SelectAll => &["ctrl-a"],
             EditCommand::Deselect => &["ctrl-d"],
+            // GIMP / Photoshop binding; Ctrl+I stays Insert Image.
+            EditCommand::InvertSelection => &["ctrl-shift-i"],
             EditCommand::TransformSelection => &["ctrl-t"],
             // Delete and Backspace are plain keys, handled by the view's
             // key handler (not while renaming a layer).
@@ -447,6 +452,7 @@ impl EditCommand {
             EditCommand::RasterizeLayer => "Rasterize Layer",
             EditCommand::SelectAll => "Select All",
             EditCommand::Deselect => "Deselect",
+            EditCommand::InvertSelection => "Invert Selection",
             EditCommand::Clear => "Clear",
             EditCommand::TransformSelection => "Transform Selection",
         }
@@ -564,6 +570,10 @@ impl EditorState {
             }),
             EditCommand::Deselect => self.selection_command(|s| {
                 s.deselect();
+                false
+            }),
+            EditCommand::InvertSelection => self.selection_command(|s| {
+                s.invert_selection();
                 false
             }),
             EditCommand::Clear => self.layer_command(|s| s.clear_selected()),
