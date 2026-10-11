@@ -33,6 +33,7 @@ mod project_dialog;
 pub mod project_ops;
 pub mod rasterize_ops;
 pub mod render_worker;
+pub mod ribbon_icons;
 pub mod state;
 pub mod swatch_ops;
 mod swatches_panel;
@@ -55,24 +56,26 @@ pub const APP_ID: &str = "retro-paint-editor";
 /// is stopped and joined before this returns.
 pub fn run(sink: FrameSink) {
     let (mut worker, client, canvas) = RenderWorker::spawn(sink);
-    gpui_platform::application().run(move |cx: &mut App| {
-        view::bind_keys(cx);
-        let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
-        let options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            app_id: Some(APP_ID.into()),
-            titlebar: Some(TitlebarOptions {
-                title: Some("Untitled — retro-paint".into()),
+    gpui_platform::application()
+        .with_assets(ribbon_icons::IconAssets)
+        .run(move |cx: &mut App| {
+            view::bind_keys(cx);
+            let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
+            let options = WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                app_id: Some(APP_ID.into()),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("Untitled — retro-paint".into()),
+                    ..Default::default()
+                }),
                 ..Default::default()
-            }),
-            ..Default::default()
-        };
-        cx.open_window(options, |window, cx| {
-            cx.new(|cx| EditorView::new(client, canvas, window, cx))
-        })
-        .expect("open editor window");
-        cx.on_window_closed(|cx, _| cx.quit()).detach();
-        cx.activate(true);
-    });
+            };
+            cx.open_window(options, |window, cx| {
+                cx.new(|cx| EditorView::new(client, canvas, window, cx))
+            })
+            .expect("open editor window");
+            cx.on_window_closed(|cx, _| cx.quit()).detach();
+            cx.activate(true);
+        });
     worker.shutdown();
 }

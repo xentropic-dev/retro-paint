@@ -5,7 +5,7 @@ use gpui::{
     App, Context, Div, Entity, ExternalPaths, FocusHandle, KeyBinding, KeyDownEvent, KeyUpEvent,
     ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
     Point, Rgba, ScrollDelta, ScrollWheelEvent, SharedString, Stateful, Window, actions, canvas,
-    div, point, prelude::*, px, rgb,
+    div, point, prelude::*, px, rgb, svg,
 };
 use rp_doc::Tool;
 use rp_palette_dither::Rgb;
@@ -24,6 +24,7 @@ use crate::project_dialog::ProjectDialog;
 use crate::render_worker::{
     CanvasReceiver, Overlay, RenderJob, Request, TIMING_ENV, WorkerClient, next_request,
 };
+use crate::ribbon_icons::{Icon, tool_key, tool_tooltip, tooltip_text};
 use crate::state::{EditorState, FileCommand, ViewCommand, shortcut_label, tool_label};
 use crate::swatch_ops::color_key;
 use crate::swatches_panel::SwatchesPanel;
@@ -110,6 +111,10 @@ const MENU_BAR_H: f32 = 26.;
 /// Width of a top-level menu-bar button (File, Edit).
 const MENU_BUTTON_W: f32 = 48.;
 const RIBBON_H: f32 = 44.;
+/// Hit size of a ribbon icon button (square).
+const ICON_BUTTON_PX: f32 = 28.;
+/// Drawn size of a ribbon icon: one logical pixel per icon grid unit.
+const ICON_PX: f32 = crate::ribbon_icons::ICON_GRID as f32;
 /// Width of the right-hand panel column. Its sections size to their content
 /// and the column scrolls as a whole when the window is too short.
 const PANEL_W: f32 = 260.;
@@ -425,12 +430,16 @@ impl EditorView {
         }
         // Photobash input next to the tools: the same portal dialog as
         // File > Insert Image… (Ctrl+V pastes).
+        let insert_tip = tooltip_text(
+            "Insert Image",
+            Some(&shortcut_label(FileCommand::InsertImage.keystroke())),
+        );
         tools = tools.child(div().ml_2().child(
-            ribbon_button("insert-image".into(), "Insert Image", false).on_click(cx.listener(
-                |this, _, window, cx| {
+            icon_button("insert-image", Icon::InsertImage, insert_tip, false, true).on_click(
+                cx.listener(|this, _, window, cx| {
                     this.run(FileCommand::InsertImage, window, cx);
-                },
-            )),
+                }),
+            ),
         ));
         // Wraps onto a second line instead of clipping in narrow windows.
         div()
@@ -494,16 +503,34 @@ impl EditorView {
                             .flex()
                             .flex_row()
                             .gap_1()
-                            .child(chip_button("swap-colors", "⇄").on_click(cx.listener(
-                                |this, _, _, cx| {
-                                    this.edit(cx, |s| s.swap_colors());
-                                },
-                            )))
-                            .child(chip_button("reset-colors", "◩").on_click(cx.listener(
-                                |this, _, _, cx| {
-                                    this.edit(cx, |s| s.reset_colors());
-                                },
-                            ))),
+                            .child(
+                                icon_button(
+                                    "swap-colors",
+                                    Icon::SwapColors,
+                                    tooltip_text("Swap colors", Some("X")),
+                                    false,
+                                    true,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        this.edit(cx, |s| s.swap_colors());
+                                    },
+                                )),
+                            )
+                            .child(
+                                icon_button(
+                                    "reset-colors",
+                                    Icon::ResetColors,
+                                    tooltip_text("Reset colors", Some("D")),
+                                    false,
+                                    true,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        this.edit(cx, |s| s.reset_colors());
+                                    },
+                                )),
+                            ),
                     ),
             )
     }
@@ -522,11 +549,17 @@ impl EditorView {
         let (size, tip) = (brush.size(), brush.tip());
         let mut tips = div().flex().flex_row().gap_1();
         for t in [BrushTip::Hard, BrushTip::Soft] {
+            let icon = match t {
+                BrushTip::Hard => Icon::TipHard,
+                BrushTip::Soft => Icon::TipSoft,
+            };
             tips = tips.child(
-                ribbon_button(
+                icon_button(
                     SharedString::from(format!("tip-{t:?}")),
-                    t.label(),
+                    icon,
+                    tooltip_text(&format!("{} brush", t.label()), None),
                     tip == t,
+                    true,
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.edit(cx, |s| s.set_brush_tip(t));
@@ -541,11 +574,16 @@ impl EditorView {
             .text_sm()
             .child(div().text_color(rgb(TEXT_DIM)).child("Size"))
             .child(
-                ribbon_button("size-down".into(), "−", false)
-                    .when(size <= MIN_BRUSH_SIZE, |d| d.text_color(rgb(TEXT_DIM)))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.edit(cx, |s| s.brush_size_down());
-                    })),
+                icon_button(
+                    "size-down",
+                    Icon::SizeDown,
+                    tooltip_text("Smaller brush", Some("[")),
+                    false,
+                    size > MIN_BRUSH_SIZE,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.edit(cx, |s| s.brush_size_down());
+                })),
             )
             .child(
                 div()
@@ -556,11 +594,16 @@ impl EditorView {
                     .child(format!("{size} px")),
             )
             .child(
-                ribbon_button("size-up".into(), "+", false)
-                    .when(size >= MAX_BRUSH_SIZE, |d| d.text_color(rgb(TEXT_DIM)))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.edit(cx, |s| s.brush_size_up());
-                    })),
+                icon_button(
+                    "size-up",
+                    Icon::SizeUp,
+                    tooltip_text("Larger brush", Some("]")),
+                    false,
+                    size < MAX_BRUSH_SIZE,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.edit(cx, |s| s.brush_size_up());
+                })),
             )
             .child(tips)
     }
@@ -758,6 +801,11 @@ impl EditorView {
                 self.edit(cx, |s| s.color_key(c));
             }
             "]" if plain => self.edit(cx, |s| s.brush_size_up()),
+            key if s.renaming.is_none()
+                && let Some(t) = tool_key(key, plain && !m.shift) =>
+            {
+                self.edit(cx, |s| s.select_tool(t));
+            }
             _ => {}
         }
     }
@@ -880,31 +928,79 @@ fn dropdown(left: f32) -> Div {
 }
 
 fn tool_button(tool: Tool, selected: bool) -> Stateful<Div> {
-    ribbon_button(
+    icon_button(
         SharedString::from(format!("tool-{tool:?}")),
-        tool_label(tool),
+        Icon::for_tool(tool),
+        tool_tooltip(tool),
         selected,
+        true,
     )
 }
 
-fn ribbon_button(id: SharedString, label: &'static str, selected: bool) -> Stateful<Div> {
+/// A square ribbon button showing `icon`, with a hover tooltip. The icon is
+/// tinted with the text color: white on the accent fill when `selected`,
+/// dimmed when not `enabled` (still clickable; the state refuses). Every
+/// ribbon tool and command button uses this.
+pub(crate) fn icon_button(
+    id: impl Into<SharedString>,
+    icon: Icon,
+    tooltip: impl Into<SharedString>,
+    selected: bool,
+    enabled: bool,
+) -> Stateful<Div> {
+    let tooltip: SharedString = tooltip.into();
+    let tint = if selected {
+        0xffffff
+    } else if enabled {
+        TEXT
+    } else {
+        TEXT_DIM
+    };
     div()
-        .id(id)
-        .px_3()
-        .py_1()
+        .id(id.into())
+        .w(px(ICON_BUTTON_PX))
+        .h(px(ICON_BUTTON_PX))
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
         .rounded_sm()
-        .text_sm()
         .cursor_pointer()
         .border_1()
-        .when(selected, |d| {
-            d.bg(rgb(ACCENT))
-                .border_color(rgb(0x5a96e8))
-                .text_color(rgb(0xffffff))
-        })
+        .when(selected, |d| d.bg(rgb(ACCENT)).border_color(rgb(0x5a96e8)))
         .when(!selected, |d| {
             d.border_color(rgb(0x404040)).hover(|s| s.bg(rgb(BG_HOVER)))
         })
-        .child(label)
+        .tooltip(move |_, cx| {
+            let text = tooltip.clone();
+            cx.new(|_| RibbonTooltip(text)).into()
+        })
+        .child(
+            svg()
+                .path(icon.path())
+                .flex_none()
+                .size(px(ICON_PX))
+                .text_color(rgb(tint)),
+        )
+}
+
+/// Tooltip bubble for [`icon_button`].
+struct RibbonTooltip(SharedString);
+
+impl Render for RibbonTooltip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_2()
+            .py_1()
+            .bg(rgb(BG_MENU))
+            .border_1()
+            .border_color(rgb(0x404040))
+            .rounded_sm()
+            .shadow_lg()
+            .text_xs()
+            .text_color(rgb(TEXT))
+            .child(self.0.clone())
+    }
 }
 
 /// A full-color [`Rgb`] as a GPUI color.
@@ -915,26 +1011,6 @@ pub(crate) fn rgba(c: Rgb) -> Rgba {
         b: c.b as f32 / 255.,
         a: 1.,
     }
-}
-
-/// Small square button next to the fg/bg chips (swap, reset).
-fn chip_button(id: &'static str, glyph: &'static str) -> Stateful<Div> {
-    div()
-        .id(id)
-        .w(px(26.))
-        .h(px(26.))
-        .flex()
-        .flex_none()
-        .items_center()
-        .justify_center()
-        .rounded_sm()
-        .border_1()
-        .border_color(rgb(0x404040))
-        .text_base()
-        .text_color(rgb(TEXT))
-        .cursor_pointer()
-        .hover(|s| s.bg(rgb(BG_HOVER)).text_color(rgb(0xffffff)))
-        .child(glyph)
 }
 
 /// A clickable fg/bg chip (opens the color picker).
