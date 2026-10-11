@@ -185,12 +185,18 @@ impl ScreenRun {
 /// `edges` mapped to the screen by `vp`, dropping runs entirely outside the
 /// view (with a 1 px margin).
 pub fn screen_runs(edges: &[Edge], vp: &Viewport) -> Vec<ScreenRun> {
+    screen_runs_shifted(edges, vp, (0.0, 0.0))
+}
+
+/// Like [`screen_runs`], with the edges moved by `(dx, dy)` canvas pixels
+/// (a floating selection's move).
+pub fn screen_runs_shifted(edges: &[Edge], vp: &Viewport, (dx, dy): (f32, f32)) -> Vec<ScreenRun> {
     let view = vp.view_size();
     let z = vp.zoom();
     edges
         .iter()
         .filter_map(|e| {
-            let p = vp.canvas_to_screen(Vec2::new(e.x as f32, e.y as f32));
+            let p = vp.canvas_to_screen(Vec2::new(e.x as f32 + dx, e.y as f32 + dy));
             let len = e.len as f32 * z;
             let (x1, y1) = if e.horizontal {
                 (p.x + len, p.y)
@@ -440,6 +446,7 @@ impl EditorState {
         if !self.tool_selects() {
             return;
         }
+        self.settle_float();
         self.shift_held = shift;
         let c = self.viewport.screen_to_canvas(screen);
         let mode = select_mode(shift, alt);
@@ -535,6 +542,7 @@ impl EditorState {
 
     /// Ctrl+A.
     pub fn select_all(&mut self) {
+        self.settle_float();
         self.selection.draft = None;
         self.selection.update(|s| s.select_all());
         self.selection_status();
@@ -542,6 +550,7 @@ impl EditorState {
 
     /// Ctrl+D, Edit > Deselect.
     pub fn deselect(&mut self) {
+        self.settle_float();
         self.selection.draft = None;
         if !self.selection.selection().is_empty() {
             self.selection.update(|s| s.clear());
@@ -638,8 +647,12 @@ impl EditorState {
         }
         let vp = &self.viewport;
         let to_screen = |[x, y]: [f32; 2]| vp.canvas_to_screen(Vec2::new(x, y));
+        let runs = match self.selection_edge_shift() {
+            Some(shift) => screen_runs_shifted(edges, vp, shift),
+            None => Vec::new(),
+        };
         let mut o = SelectionOverlay {
-            runs: screen_runs(edges, vp),
+            runs,
             ..Default::default()
         };
         match &self.selection.draft {

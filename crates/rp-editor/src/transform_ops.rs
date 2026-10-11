@@ -313,6 +313,69 @@ pub fn rotate_about_center(
     Transform { rotation: r, ..t0 }
 }
 
+/// A transform computed for a pointer position, with its status text.
+#[derive(Clone, PartialEq, Debug)]
+pub struct Placed {
+    pub transform: Transform,
+    pub status: String,
+    /// The whole-pixel offset of a Move drag.
+    pub moved: Option<(i32, i32)>,
+}
+
+/// Where a `kind` drag that started at canvas point `start` with the box at
+/// `t0` (placing a `src` image) puts it for the pointer at `p`; `shift`
+/// frees the aspect ratio (scale) or snaps the angle (rotate). Shared by
+/// image layers and floating selections.
+pub fn placement(
+    kind: DragKind,
+    t0: Transform,
+    src: Size,
+    start: Vec2,
+    p: Vec2,
+    shift: bool,
+) -> Placed {
+    match kind {
+        DragKind::Move => {
+            let d = drag_delta(start, p);
+            Placed {
+                transform: translated(t0, d),
+                status: format!("Move {}, {}", d.0, d.1),
+                moved: Some(d),
+            }
+        }
+        DragKind::Scale(c) => {
+            let t = scale_from_corner(t0, src, c, p, !shift);
+            Placed {
+                transform: t,
+                status: format!(
+                    "Scale {:.0}% × {:.0}%",
+                    t.scale_x.abs() * 100.0,
+                    t.scale_y.abs() * 100.0
+                ),
+                moved: None,
+            }
+        }
+        DragKind::Rotate => {
+            let center = Frame::of(&t0, src).center;
+            let t = rotate_about_center(t0, center, start, p, shift);
+            Placed {
+                transform: t,
+                status: format!("Rotate {:.1}°", t.rotation.to_degrees()),
+                moved: None,
+            }
+        }
+    }
+}
+
+/// The undo label of a layer drag.
+const fn drag_label(kind: DragKind) -> EditLabel {
+    match kind {
+        DragKind::Move => EditLabel::Move,
+        DragKind::Scale(_) => EditLabel::Scale,
+        DragKind::Rotate => EditLabel::Rotate,
+    }
+}
+
 /// What a drag does.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DragKind {
@@ -328,6 +391,9 @@ pub enum StartPlacement {
     Offset(i32, i32),
     /// Image layer transform and source size.
     Image(Transform, Size),
+    /// A floating selection's transform and piece size (see
+    /// [`crate::float_ops`]).
+    Float(Transform, Size),
 }
 
 /// A Move / Select drag in progress.
@@ -369,6 +435,9 @@ impl EditorState {
     /// Screen-space transform handles to draw: the Select tool on an image
     /// layer whose source is loaded.
     pub fn transform_handles(&self) -> Option<HandleLayout> {
+        if let Some(frame) = self.selection_frame() {
+            return Some(HandleLayout::new(&frame, &self.viewport));
+        }
         if self.tool != Tool::Select {
             return None;
         }
@@ -384,6 +453,9 @@ impl EditorState {
         self.transform_drag = None;
         if !self.tool_transforms() {
             return false;
+        }
+        if let Some(handled) = self.begin_float_drag(screen) {
+            return handled;
         }
         let Some(layer) = self.selected() else {
             self.status = "Can't move: no layer selected".into();
@@ -414,11 +486,7 @@ impl EditorState {
                 StartPlacement::Image(i.transform, src)
             }
         };
-        let label = match kind {
-            DragKind::Move => EditLabel::Move,
-            DragKind::Scale(_) => EditLabel::Scale,
-            DragKind::Rotate => EditLabel::Rotate,
-        };
+        let label = drag_label(kind);
         let id = layer.id();
         let mask_before = match kind {
             DragKind::Move => layer.mask.clone(),
@@ -444,6 +512,9 @@ impl EditorState {
             return false;
         };
         let p = self.viewport.screen_to_canvas(screen);
+        if let StartPlacement::Float(t0, src) = drag.before {
+            return self.continue_float_drag(&drag, t0, src, p, shift);
+        }
         let Some(layer) = self.document.layer_mut(drag.layer) else {
             self.end_transform();
             return false;
@@ -461,38 +532,16 @@ impl EditorState {
                 self.status = format!("Move {dx}, {dy}");
                 layer.translate_by(step.0, step.1).map(|()| Some((dx, dy)))
             }
-            (StartPlacement::Image(t0, src), kind) => {
-                let mut moved = None;
-                let t = match kind {
-                    DragKind::Move => {
-                        let d = drag_delta(drag.start, p);
-                        self.status = format!("Move {}, {}", d.0, d.1);
-                        moved = Some(d);
-                        translated(t0, d)
-                    }
-                    DragKind::Scale(c) => {
-                        let t = scale_from_corner(t0, src, c, p, !shift);
-                        self.status = format!(
-                            "Scale {:.0}% × {:.0}%",
-                            t.scale_x.abs() * 100.0,
-                            t.scale_y.abs() * 100.0
-                        );
-                        t
-                    }
-                    DragKind::Rotate => {
-                        let center = Frame::of(&t0, src).center;
-                        let t = rotate_about_center(t0, center, drag.start, p, shift);
-                        self.status = format!("Rotate {:.1}°", t.rotation.to_degrees());
-                        t
-                    }
-                };
+            (StartPlacement::Image(t0, src) | StartPlacement::Float(t0, src), kind) => {
+                let placed = placement(kind, t0, src, drag.start, p, shift);
+                self.status = placed.status;
                 let LayerKind::Image(cur) = &layer.kind else {
                     return false;
                 };
-                if cur.transform == t {
+                if cur.transform == placed.transform {
                     return false;
                 }
-                layer.set_transform(t).map(|()| moved)
+                layer.set_transform(placed.transform).map(|()| placed.moved)
             }
         };
         match result {
@@ -527,14 +576,23 @@ impl EditorState {
 
     /// Ends the drag, if any, recording it as one undo step.
     pub fn end_transform(&mut self) {
-        if self.transform_drag.take().is_some() {
-            self.commit_step(None);
+        match self.transform_drag.take() {
+            // A float's drags are part of its one step, recorded on commit.
+            Some(TransformDrag {
+                before: StartPlacement::Float(..),
+                ..
+            })
+            | None => {}
+            Some(_) => self.commit_step(None),
         }
     }
 
     /// Arrow keys: moves the selected layer by `(dx, dy)` canvas pixels.
     /// Refused (with a status message) if the layer's position is locked.
     pub fn nudge_selected(&mut self, dx: i32, dy: i32) -> bool {
+        if self.selection_frame().is_some() {
+            return self.nudge_float(dx, dy);
+        }
         let Some(id) = self.selected_layer else {
             self.status = "Can't move: no layer selected".into();
             return false;

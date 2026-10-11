@@ -81,6 +81,17 @@ Top of the right-hand panel column. The list shows the top of the stack at the t
 - A position-locked layer refuses moves, nudges, scaling and rotation; the status bar says why. A pixel lock does not stop moving.
 - The status bar shows the move offset, scale percentages or angle while dragging.
 
+### Transforming a selection
+
+With a selection and the **Select** or **Move** tool (or **Edit > Transform Selection**, Ctrl+T, which switches to Select), the canvas shows a transform box on the selection bounds with the same handles as image layers. The editor logic is `rp-editor`'s `float_ops`.
+
+- Dragging inside the box moves, a corner scales (aspect kept, Shift frees it, the opposite corner stays fixed), the knob rotates (Shift snaps to 15°); arrows nudge 1 px, Shift+arrows 10 px. The first of these lifts the selected pixels out of the selected paint layer (the hole is transparent; soft selection edges split alpha by coverage).
+- While floating, the canvas and the DOS view show the result live (the piece is drawn as a temporary layer just above its layer, never in the document).
+- **Enter**, a click outside the box, switching tool, layer or edit target, any File command (Save, Export, …) and any other edit or selection change apply it: the piece is stamped back into the same layer. **Escape** cancels and restores the layer byte for byte. Lift, transforms and apply are one undo step, "Transform Selection"; Ctrl+Z while floating cancels. A piece applied where it was lifted records nothing.
+- After applying, the selection follows the piece: its 50 % edge is moved, scaled and rotated with it (a whole-pixel move keeps it exact; soft edges become hard at 50 %). While floating, the dashed edge moves with a plain move and is hidden while scaled or rotated (the box shows the piece).
+- Refused, with the reason in the status bar: image layers ("Rasterize it to transform a selection"), pixel- or position-locked layers, an empty selection, and the mask as edit target.
+- While a selection exists its box replaces an image layer's own handles; a press outside the box still moves the layer. Deselect (Ctrl+D) to get the image handles back.
+
 ### Selecting
 
 Select parts of the canvas with **Rect Select** (`R`) or **Lasso** (`L`), then erase them with Delete. The selection is soft-edged coverage (see `rp_doc::selection`); the editor logic is `rp-editor`'s `select_ops`.

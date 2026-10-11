@@ -344,6 +344,7 @@ impl EditorState {
         if !self.tool_paints() {
             return false;
         }
+        self.settle_float();
         if self.edit_target() == EditTarget::Mask {
             return self.begin_mask_stroke(c, button);
         }

@@ -52,7 +52,8 @@ actions!(
         Paste,
         DuplicateLayer,
         SelectAll,
-        Deselect
+        Deselect,
+        TransformSelection
     ]
 );
 
@@ -79,6 +80,7 @@ pub fn bind_keys(cx: &mut App) {
             EditCommand::DuplicateLayer => KeyBinding::new(k, DuplicateLayer, None),
             EditCommand::SelectAll => KeyBinding::new(k, SelectAll, None),
             EditCommand::Deselect => KeyBinding::new(k, Deselect, None),
+            EditCommand::TransformSelection => KeyBinding::new(k, TransformSelection, None),
             EditCommand::FlipHorizontal
             | EditCommand::FlipVertical
             | EditCommand::RasterizeLayer
@@ -330,6 +332,16 @@ impl EditorView {
     }
     fn on_deselect(&mut self, _: &Deselect, _: &mut Window, cx: &mut Context<Self>) {
         self.edit(cx, |s| s.edit_command(EditCommand::Deselect));
+    }
+    fn on_transform_selection(
+        &mut self,
+        _: &TransformSelection,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.state.read(cx).renaming.is_none() {
+            self.edit(cx, |s| s.edit_command(EditCommand::TransformSelection));
+        }
     }
 
     fn menu_bar(&self, cx: &mut Context<Self>) -> Div {
@@ -823,6 +835,12 @@ impl EditorView {
                 self.edit(cx, |s| s.color_key(c));
             }
             "]" if plain => self.edit(cx, |s| s.brush_size_up()),
+            "enter" if s.renaming.is_none() && s.is_floating() => {
+                self.edit(cx, |s| s.commit_float());
+            }
+            "escape" if s.renaming.is_none() && s.is_floating() => {
+                self.edit(cx, |s| s.cancel_float());
+            }
             "enter" if s.renaming.is_none() && s.selection.draft.is_some() => {
                 self.edit(cx, |s| s.finish_lasso());
             }
@@ -1138,6 +1156,7 @@ impl Render for EditorView {
             .on_action(cx.listener(Self::on_duplicate_layer))
             .on_action(cx.listener(Self::on_select_all))
             .on_action(cx.listener(Self::on_deselect))
+            .on_action(cx.listener(Self::on_transform_selection))
             .on_key_down(cx.listener(Self::on_key_down))
             .on_key_up(cx.listener(Self::on_key_up))
             .on_modifiers_changed(cx.listener(|this, ev: &ModifiersChangedEvent, _, cx| {

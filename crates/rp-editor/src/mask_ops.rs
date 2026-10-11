@@ -223,6 +223,7 @@ impl EditorState {
         };
         let has_mask = layer.mask.is_some();
         let name = layer.name.clone();
+        self.settle_float();
         self.select_layer(id);
         match target {
             EditTarget::Mask if has_mask => {

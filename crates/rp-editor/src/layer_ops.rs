@@ -58,6 +58,9 @@ impl EditorState {
     /// Selects `id` if it is in the document. Ends any rename of another layer.
     pub fn select_layer(&mut self, id: LayerId) {
         if self.document.layer(id).is_some() {
+            if self.selected_layer != Some(id) {
+                self.settle_float();
+            }
             if self.renaming.as_ref().is_some_and(|r| r.layer != id) {
                 self.commit_rename();
             }

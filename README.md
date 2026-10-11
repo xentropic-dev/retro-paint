@@ -67,6 +67,8 @@ All shortcuts go to the editor window.
 | `S` / `L` / `R` / `M` / `B` / `E` / `I` | Select / Lasso / Rect Select / Move / Brush / Eraser / Picker tool |
 | Ctrl+A / Ctrl+D | Select all / Deselect |
 | Delete or Backspace | Erase the selected pixels of the selected layer (Edit > Clear) |
+| Ctrl+T | Transform the selection (Edit > Transform Selection): drag inside to move, corners scale, the knob rotates |
+| Enter / Escape (transforming a selection) | Apply / cancel the transform |
 | Shift / Alt at the start of a selection | Add to / subtract from the selection |
 | Shift during a Rect Select drag | Square the rectangle |
 | Enter / Escape (Lasso) | Close / cancel the outline being drawn |

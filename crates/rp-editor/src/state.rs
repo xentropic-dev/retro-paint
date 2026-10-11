@@ -13,6 +13,7 @@ use rp_format::ExportOptions;
 use crate::color_picker_ops::ColorPicker;
 use crate::file_ops::{Alert, ExportDraft, PendingAction, SavedMark};
 use crate::filter_ops::PaletteMemory;
+use crate::float_ops::Floating;
 use crate::layer_ops::RenameEdit;
 use crate::paint_ops::{BrushState, Stroke};
 use crate::panel_layout::{PanelSection, PanelSections};
@@ -229,6 +230,8 @@ pub struct EditorState {
     /// The document's selection and the outline being drawn (see
     /// [`crate::select_ops`]). Not part of the document or its history.
     pub selection: SelectionState,
+    /// A lifted selection being transformed (see [`crate::float_ops`]).
+    pub floating: Option<Floating>,
     /// Whether shift was held at the last pointer or key event (frees the
     /// aspect ratio while scaling, snaps the angle while rotating).
     pub shift_held: bool,
@@ -298,6 +301,7 @@ impl EditorState {
             stroke: None,
             transform_drag: None,
             selection: SelectionState::new(s),
+            floating: None,
             shift_held: false,
             project_dialog: None,
             color_picker: None,
@@ -328,6 +332,7 @@ impl EditorState {
         self.renaming = None;
         self.stroke = None;
         self.transform_drag = None;
+        self.floating = None;
         self.palette_memory = PaletteMemory::default();
         self.project_dialog = None;
         self.color_picker = None;
@@ -435,6 +440,7 @@ impl EditorState {
         if self.file_modal_open() || self.color_picker.is_some() {
             return Outcome::Done;
         }
+        self.settle_float();
         let file_job = !matches!(cmd, FileCommand::InsertImage | FileCommand::ProjectSettings);
         if file_job && self.file_busy {
             self.status = "Wait for the file operation to finish".into();
@@ -459,9 +465,10 @@ impl EditorState {
     }
 
     /// Switches tools; an unfinished selection outline is dropped (the
-    /// selection itself stays).
+    /// selection itself stays) and a floating selection is committed.
     pub fn select_tool(&mut self, tool: Tool) {
         if tool != self.tool {
+            self.settle_float();
             self.selection.draft = None;
         }
         self.tool = tool;

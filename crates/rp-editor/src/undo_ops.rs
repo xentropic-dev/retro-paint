@@ -78,6 +78,7 @@ pub enum EditLabel {
     FlipVertical,
     RasterizeLayer,
     ClearSelection,
+    TransformSelection,
 }
 
 impl EditLabel {
@@ -111,6 +112,7 @@ impl EditLabel {
             EditLabel::FlipVertical => "Flip Vertical",
             EditLabel::RasterizeLayer => "Rasterize Layer",
             EditLabel::ClearSelection => "Clear Selection",
+            EditLabel::TransformSelection => "Transform Selection",
         }
     }
 }
@@ -382,11 +384,14 @@ pub enum EditCommand {
     Deselect,
     /// Erase the selected pixels of the selected layer (Delete).
     Clear,
+    /// Show the transform box on the selection (see
+    /// [`crate::float_ops`]).
+    TransformSelection,
 }
 
 impl EditCommand {
     /// Every command, in Edit-menu order.
-    pub const ALL: [EditCommand; 10] = [
+    pub const ALL: [EditCommand; 11] = [
         EditCommand::Undo,
         EditCommand::Redo,
         EditCommand::Paste,
@@ -397,6 +402,7 @@ impl EditCommand {
         EditCommand::SelectAll,
         EditCommand::Deselect,
         EditCommand::Clear,
+        EditCommand::TransformSelection,
     ];
 
     /// GPUI keystroke strings bound to the command (possibly none); the
@@ -409,6 +415,7 @@ impl EditCommand {
             EditCommand::DuplicateLayer => &["ctrl-j"],
             EditCommand::SelectAll => &["ctrl-a"],
             EditCommand::Deselect => &["ctrl-d"],
+            EditCommand::TransformSelection => &["ctrl-t"],
             // Delete and Backspace are plain keys, handled by the view's
             // key handler (not while renaming a layer).
             EditCommand::FlipHorizontal
@@ -441,6 +448,7 @@ impl EditCommand {
             EditCommand::SelectAll => "Select All",
             EditCommand::Deselect => "Deselect",
             EditCommand::Clear => "Clear",
+            EditCommand::TransformSelection => "Transform Selection",
         }
     }
 
@@ -479,6 +487,7 @@ impl EditorState {
     /// Runs a one-shot document edit as one snapshot step (none if the
     /// document did not change).
     pub(crate) fn record<R>(&mut self, label: EditLabel, f: impl FnOnce(&mut Self) -> R) -> R {
+        self.settle_float();
         self.history
             .begin_snapshot(&self.document, label, None, self.content);
         let r = f(self);
@@ -494,6 +503,7 @@ impl EditorState {
         key: Coalesce,
         f: impl FnOnce(&mut Self) -> R,
     ) -> R {
+        self.settle_float();
         if self.history.coalesces(key, self.content) {
             let r = f(self);
             self.history.extend_newest(self.content);
@@ -522,6 +532,7 @@ impl EditorState {
         if self.transform_drag.is_some() {
             self.end_transform();
         }
+        self.settle_float();
         self.renaming = None;
     }
 
@@ -556,6 +567,7 @@ impl EditorState {
                 false
             }),
             EditCommand::Clear => self.layer_command(|s| s.clear_selected()),
+            EditCommand::TransformSelection => self.selection_command(|s| s.transform_selection()),
         }
     }
 
@@ -591,6 +603,9 @@ impl EditorState {
     fn apply_history(&mut self, cmd: EditCommand) -> bool {
         if self.history_blocked() {
             return false;
+        }
+        if cmd == EditCommand::Undo && self.cancel_float() {
+            return true;
         }
         self.finish_gestures();
         if !cmd.enabled(&self.history) {

@@ -57,10 +57,13 @@ pub struct RenderJob {
 }
 
 impl RenderJob {
+    /// The state's [`render_snapshot`](EditorState::render_snapshot): a
+    /// floating selection is drawn as a temporary layer.
     pub fn from_state(state: &EditorState) -> Self {
+        let (document, sources) = state.render_snapshot();
         Self {
-            document: state.document.clone(),
-            sources: state.sources.clone(),
+            document,
+            sources,
             version: state.doc_version,
             requested: Instant::now(),
         }
