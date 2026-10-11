@@ -842,6 +842,7 @@ fn section_header(section: PanelSection, sections: &PanelSections) -> Stateful<D
         .child(
             div()
                 .w(px(10.))
+                .text_size(px(9.))
                 .text_color(rgb(TEXT_DIM))
                 .child(sections.glyph(section)),
         )

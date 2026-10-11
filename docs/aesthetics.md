@@ -43,6 +43,10 @@ The editor and DOS view are always two separate OS windows. With one screen, the
 - Insert images.
 - Apply a brush. GIMP brushes are supported in `.gbr` (bitmap) and `.vbr` (parametric) formats.
 
+### Panel column
+
+The right-hand column (260 px wide) holds Layers, Filter and Swatches, top to bottom, each under a clickable header (▼ expanded, ▶ collapsed). Collapsed state is editor-session state: it survives New and Open but is not stored in the document or any file. Everything starts expanded. Sections take their natural height and the column scrolls as a whole when the window is too short; the layer list shows 3 to 8 rows and scrolls past that. The ribbon wraps onto a second line rather than clipping in narrow windows.
+
 ### Layers panel
 
 Top of the right-hand panel column. The list shows the top of the stack at the top. Each row has a visibility toggle, the name, and badges for an image layer (IMG), a pixel or position lock (LOCK) and a mask (MASK); the selected row is highlighted. Click a row to select it; double-click it to rename inline (Enter applies, Escape cancels, clicking elsewhere applies; an empty name keeps the old one). Above the list are controls for the selected layer: blend mode (Normal, Multiply, Screen, Overlay), opacity (a click-to-set bar in 5% segments plus −/+ steppers of 5%), Pixels and Position lock toggles, and Add/Remove mask. Below it are New, Image, Delete, Up and Down.

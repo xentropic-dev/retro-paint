@@ -242,9 +242,10 @@ impl FilterPanel {
             )))
             .child(
                 div()
-                    .w(px(30.))
+                    .w(px(34.))
                     .flex_none()
                     .text_right()
+                    .whitespace_nowrap()
                     .child(slider.readout(value)),
             )
             .child(

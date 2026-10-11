@@ -58,12 +58,12 @@ impl PanelSections {
         self.collapsed[i] = !self.collapsed[i];
     }
 
-    /// Disclosure glyph for a section header: ▾ expanded, ▸ collapsed.
+    /// Disclosure glyph for a section header: ▼ expanded, ▶ collapsed.
     pub fn glyph(&self, section: PanelSection) -> &'static str {
         if self.is_collapsed(section) {
-            "▸"
+            "▶"
         } else {
-            "▾"
+            "▼"
         }
     }
 }
@@ -77,7 +77,7 @@ mod tests {
         let p = PanelSections::default();
         for s in PanelSection::ALL {
             assert!(!p.is_collapsed(s), "{s:?}");
-            assert_eq!(p.glyph(s), "▾");
+            assert_eq!(p.glyph(s), "▼");
         }
     }
 
@@ -88,7 +88,7 @@ mod tests {
         assert!(p.is_collapsed(PanelSection::Filter));
         assert!(!p.is_collapsed(PanelSection::Layers));
         assert!(!p.is_collapsed(PanelSection::Swatches));
-        assert_eq!(p.glyph(PanelSection::Filter), "▸");
+        assert_eq!(p.glyph(PanelSection::Filter), "▶");
         p.toggle(PanelSection::Filter);
         assert_eq!(p, PanelSections::default());
     }
