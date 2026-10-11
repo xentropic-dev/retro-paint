@@ -14,6 +14,8 @@
 //!   cursor in output pixels, active tool, active color).
 //! - [`History`]: memory-bounded undo/redo of whole-document snapshots and
 //!   paint-layer dirty-rect patches (see [`history`]).
+//! - [`Selection`] and [`Float`]: antialiased lasso selections and a lifted,
+//!   transformable piece of a paint layer (see [`selection`]).
 
 pub mod blend;
 mod document;
@@ -22,6 +24,7 @@ mod frame;
 pub mod history;
 mod layer;
 mod raster;
+pub mod selection;
 
 pub use blend::BlendMode;
 pub use document::{Document, Layout};
@@ -33,3 +36,4 @@ pub use layer::{
 };
 pub use raster::{BufferSizeError, GrayImage, RgbaImage, Size};
 pub use rp_palette_dither::{DitherSettings, PaletteChoice};
+pub use selection::{Float, SelectMode, Selection};

@@ -367,8 +367,9 @@ impl<'a> Draw<'a> {
     }
 }
 
-/// Canvas → source mapping for one image layer.
-struct InverseMap {
+/// Canvas → source mapping for one image layer (also used to place a
+/// [`Float`](crate::Float)).
+pub(crate) struct InverseMap {
     src_w: f32,
     src_h: f32,
     center_x: f32,
@@ -380,7 +381,7 @@ struct InverseMap {
 }
 
 impl InverseMap {
-    fn new(t: &Transform, src: Size) -> Option<Self> {
+    pub(crate) fn new(t: &Transform, src: Size) -> Option<Self> {
         let ok = |v: f32| v.is_finite() && v.abs() > 1e-6;
         if !ok(t.scale_x) || !ok(t.scale_y) || src.area() == 0 {
             return None;
@@ -400,7 +401,7 @@ impl InverseMap {
 
     /// Source point (continuous, pixel centers at `i + 0.5`) for a canvas
     /// point.
-    fn source_point(&self, px: f32, py: f32) -> (f32, f32) {
+    pub(crate) fn source_point(&self, px: f32, py: f32) -> (f32, f32) {
         let dx = px - self.center_x;
         let dy = py - self.center_y;
         // R(−θ) · d
@@ -412,19 +413,36 @@ impl InverseMap {
         )
     }
 
-    /// Canvas pixel range `[x0, x1) × [y0, y1)` that can hit the image.
-    fn canvas_bounds(&self, canvas: Size) -> Option<(u32, u32, u32, u32)> {
+    /// Canvas positions of the source rectangle's corners: top-left,
+    /// top-right, bottom-right, bottom-left (in source orientation).
+    pub(crate) fn corners(&self) -> [[f32; 2]; 4] {
         let hw = self.src_w * self.scale_x / 2.0;
         let hh = self.src_h * self.scale_y / 2.0;
+        [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)].map(|(ox, oy)| {
+            // R(θ) · offset
+            [
+                self.center_x + self.cos * ox - self.sin * oy,
+                self.center_y + self.sin * ox + self.cos * oy,
+            ]
+        })
+    }
+
+    /// Axis-aligned extent of [`corners`](Self::corners):
+    /// `(min_x, min_y, max_x, max_y)`.
+    pub(crate) fn extent(&self) -> (f32, f32, f32, f32) {
         let mut min = (f32::INFINITY, f32::INFINITY);
         let mut max = (f32::NEG_INFINITY, f32::NEG_INFINITY);
-        for (ox, oy) in [(-hw, -hh), (hw, -hh), (-hw, hh), (hw, hh)] {
-            // R(θ) · offset
-            let x = self.center_x + self.cos * ox - self.sin * oy;
-            let y = self.center_y + self.sin * ox + self.cos * oy;
+        for [x, y] in self.corners() {
             min = (min.0.min(x), min.1.min(y));
             max = (max.0.max(x), max.1.max(y));
         }
+        (min.0, min.1, max.0, max.1)
+    }
+
+    /// Canvas pixel range `[x0, x1) × [y0, y1)` that can hit the image.
+    fn canvas_bounds(&self, canvas: Size) -> Option<(u32, u32, u32, u32)> {
+        let (min_x, min_y, max_x, max_y) = self.extent();
+        let (min, max) = ((min_x, min_y), (max_x, max_y));
         let clip = |v: f32, hi: u32| (v.max(0.0) as u32).min(hi);
         let x0 = clip(min.0.floor() - 1.0, canvas.width);
         let y0 = clip(min.1.floor() - 1.0, canvas.height);
@@ -436,7 +454,7 @@ impl InverseMap {
 
 /// Bilinear sample at a continuous source point, or `None` outside the
 /// source rectangle. Returns straight alpha in `0.0..=1.0`.
-fn sample_bilinear(src: &RgbaImage, sx: f32, sy: f32) -> Option<[f32; 4]> {
+pub(crate) fn sample_bilinear(src: &RgbaImage, sx: f32, sy: f32) -> Option<[f32; 4]> {
     let (w, h) = (src.width() as f32, src.height() as f32);
     if !(sx >= 0.0 && sy >= 0.0 && sx < w && sy < h) {
         return None;

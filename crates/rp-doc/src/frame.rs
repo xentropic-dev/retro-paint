@@ -14,6 +14,8 @@ use crate::raster::Size;
 pub enum Tool {
     /// Selection. DOS cursor: arrow.
     Select,
+    /// Lasso selection (freehand or polygon). DOS cursor: crosshair.
+    Lasso,
     /// Move or transform a layer. DOS cursor: arrow.
     Move,
     /// Paint with the current brush. DOS cursor: crosshair or brush outline.
@@ -27,8 +29,9 @@ pub enum Tool {
 
 impl Tool {
     /// Every tool, in tool-strip order.
-    pub const ALL: [Tool; 5] = [
+    pub const ALL: [Tool; 6] = [
         Tool::Select,
+        Tool::Lasso,
         Tool::Move,
         Tool::Brush,
         Tool::Eraser,
@@ -133,6 +136,7 @@ mod tests {
         assert!(!Tool::Brush.uses_arrow_cursor());
         assert!(!Tool::Eraser.uses_arrow_cursor());
         assert!(!Tool::Picker.uses_arrow_cursor());
+        assert!(!Tool::Lasso.uses_arrow_cursor());
     }
 
     #[test]

@@ -354,6 +354,7 @@ fn draw_panel(s: &mut IndexedScreen, l: &ScreenLayout, frame: &FrameMsg) {
 fn tool_label(frame: &FrameMsg) -> String {
     let name = match frame.tool {
         Tool::Select => "SELECT",
+        Tool::Lasso => "LASSO",
         Tool::Move => "MOVE",
         Tool::Brush => "BRUSH",
         Tool::Eraser => "ERASER",
