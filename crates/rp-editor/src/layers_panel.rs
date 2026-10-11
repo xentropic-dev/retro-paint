@@ -17,13 +17,15 @@ use rp_doc::{BlendMode, Layer, LayerId, LayerKind};
 use crate::insert_flow::prompt_insert_image;
 use crate::layer_ops::OPACITY_STEP;
 use crate::state::EditorState;
-use crate::view::{
-    ACCENT, BG_HOVER, BG_PANEL_HEADER, BORDER, TEXT, TEXT_DIM, edit_state, panel_header,
-};
+use crate::view::{ACCENT, BG_HOVER, BG_PANEL_HEADER, BORDER, TEXT, TEXT_DIM, edit_state};
 
 /// Opacity bar segments; each sets a multiple of 100 / this.
 const OPACITY_SEGMENTS: i32 = 20;
 const ROW_H: f32 = 26.;
+/// The layer list shows at least this many rows and scrolls past this many;
+/// the panel column around it scrolls as a whole.
+const LIST_MIN_ROWS: f32 = 3.;
+const LIST_MAX_ROWS: f32 = 8.;
 
 /// What a list row shows; copied out so rendering never clones pixels.
 struct RowInfo {
@@ -436,8 +438,8 @@ impl Render for LayersPanel {
         };
         let mut list = div()
             .id("layer-list")
-            .flex_1()
-            .min_h_0()
+            .min_h(px(ROW_H * LIST_MIN_ROWS))
+            .max_h(px(ROW_H * LIST_MAX_ROWS))
             .flex()
             .flex_col()
             .overflow_y_scroll();
@@ -449,11 +451,10 @@ impl Render for LayersPanel {
             .id("layers-panel")
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key_down))
-            .size_full()
+            .w_full()
             .flex()
             .flex_col()
             .text_color(rgb(TEXT))
-            .child(panel_header("Layers"))
             .child(self.controls(cx))
             .child(list)
             .child(self.footer(cx))

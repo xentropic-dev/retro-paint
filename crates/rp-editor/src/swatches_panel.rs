@@ -10,7 +10,7 @@ use gpui::{Context, Entity, MouseButton, SharedString, Window, div, prelude::*, 
 use crate::layers_panel::button;
 use crate::state::EditorState;
 use crate::swatch_ops::MAX_SWATCHES;
-use crate::view::{TEXT, TEXT_DIM, edit_state, panel_header, rgba};
+use crate::view::{TEXT, TEXT_DIM, edit_state, rgba};
 
 const CELL: f32 = 18.;
 
@@ -64,10 +64,6 @@ impl Render for SwatchesPanel {
             );
 
         let mut grid = div()
-            .id("swatch-grid")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
             .p_2()
             .flex()
             .flex_row()
@@ -115,11 +111,10 @@ impl Render for SwatchesPanel {
         }
 
         div()
-            .size_full()
+            .w_full()
             .flex()
             .flex_col()
             .text_color(rgb(TEXT))
-            .child(panel_header("Swatches"))
             .child(controls)
             .child(grid)
             .child(

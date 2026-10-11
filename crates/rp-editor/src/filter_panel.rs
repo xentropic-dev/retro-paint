@@ -16,7 +16,7 @@ use crate::filter_ops::{
 };
 use crate::layers_panel::toggle;
 use crate::state::EditorState;
-use crate::view::{ACCENT, BG_PANEL_HEADER, TEXT_DIM, edit_state, panel_header};
+use crate::view::{ACCENT, BG_PANEL_HEADER, TEXT_DIM, edit_state};
 
 /// Cells in a slider bar (an even number, for the bipolar bars).
 const BAR_SEGMENTS: i32 = 20;
@@ -270,10 +270,6 @@ impl Render for FilterPanel {
             )
         };
         let mut body = div()
-            .id("filter-body")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
             .flex()
             .flex_col()
             .gap_1()
@@ -301,11 +297,6 @@ impl Render for FilterPanel {
                 );
         }
         body = body.child(div().pt_1().text_color(rgb(TEXT_DIM)).child(summary));
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .child(panel_header("Filter"))
-            .child(body)
+        body.w_full()
     }
 }

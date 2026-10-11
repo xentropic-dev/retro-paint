@@ -14,6 +14,7 @@ use crate::file_ops::{Alert, ExportDraft, PendingAction, SavedMark};
 use crate::filter_ops::PaletteMemory;
 use crate::layer_ops::RenameEdit;
 use crate::paint_ops::{BrushState, Stroke};
+use crate::panel_layout::{PanelSection, PanelSections};
 use crate::project_ops::ProjectDraft;
 use crate::transform_ops::TransformDrag;
 use crate::viewport::{Vec2, Viewport};
@@ -230,6 +231,9 @@ pub struct EditorState {
     pub alert: Option<Alert>,
     /// A save, open or export is running off the UI thread.
     pub file_busy: bool,
+    /// Collapsed sections of the right-hand panel column. Session only:
+    /// survives New and Open, never saved.
+    pub panels: PanelSections,
 }
 
 impl Default for EditorState {
@@ -278,7 +282,13 @@ impl EditorState {
             last_export: ExportOptions::default(),
             alert: None,
             file_busy: false,
+            panels: PanelSections::default(),
         }
+    }
+
+    /// Collapses or expands one section of the right-hand panel column.
+    pub fn toggle_panel(&mut self, section: PanelSection) {
+        self.panels.toggle(section);
     }
 
     /// Replaces the document, selects its top layer, marks it changed and
@@ -453,6 +463,25 @@ mod tests {
         assert_eq!(st.document.layers().len(), 1);
         assert_eq!(st.tool, Tool::Brush);
         assert!(!st.file_menu_open);
+    }
+
+    #[test]
+    fn panel_collapse_survives_new_and_stays_out_of_the_document() {
+        let mut st = EditorState::new();
+        st.toggle_panel(PanelSection::Filter);
+        assert!(st.panels.is_collapsed(PanelSection::Filter));
+        let version = st.doc_version;
+        let doc = st.document.clone();
+        st.toggle_panel(PanelSection::Swatches);
+        assert_eq!(st.doc_version, version, "collapsing is not a document edit");
+        assert_eq!(st.document, doc);
+        assert!(!st.is_dirty());
+        st.set_document(new_document());
+        assert!(st.panels.is_collapsed(PanelSection::Filter));
+        assert!(st.panels.is_collapsed(PanelSection::Swatches));
+        assert!(!st.panels.is_collapsed(PanelSection::Layers));
+        st.toggle_panel(PanelSection::Filter);
+        assert!(!st.panels.is_collapsed(PanelSection::Filter));
     }
 
     #[test]

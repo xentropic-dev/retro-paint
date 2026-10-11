@@ -23,6 +23,7 @@ mod insert_flow;
 pub mod layer_ops;
 mod layers_panel;
 pub mod paint_ops;
+pub mod panel_layout;
 mod project_dialog;
 pub mod project_ops;
 pub mod render_worker;

@@ -17,6 +17,7 @@ use crate::filter_panel::FilterPanel;
 use crate::insert_flow::insert_image_files;
 use crate::layers_panel::LayersPanel;
 use crate::paint_ops::{BrushTip, MAX_BRUSH_SIZE, MIN_BRUSH_SIZE, PaintButton};
+use crate::panel_layout::{PanelSection, PanelSections};
 use crate::project_dialog::ProjectDialog;
 use crate::render_worker::{
     CanvasReceiver, Overlay, RenderJob, Request, TIMING_ENV, WorkerClient, next_request,
@@ -87,13 +88,11 @@ const DROP_HIGHLIGHT: u32 = 0x2a3f5c;
 
 const MENU_BAR_H: f32 = 26.;
 const RIBBON_H: f32 = 44.;
+/// Width of the right-hand panel column. Its sections size to their content
+/// and the column scrolls as a whole when the window is too short.
 const PANEL_W: f32 = 260.;
-/// The Layers panel keeps at least this height; Filter and Swatches give way.
-const LAYERS_MIN_H: f32 = 260.;
-/// Filter panel height when the window has room for it.
-const FILTER_H: f32 = 340.;
-/// Swatches panel height when the window has room for it.
-const SWATCHES_H: f32 = 140.;
+/// Height of a collapsible section header in the panel column.
+const SECTION_HEADER_H: f32 = 24.;
 
 /// Runs `f` on the shared state and notifies its observers (every view that
 /// shows it). The single path for mutating [`EditorState`] from a view.
@@ -360,13 +359,19 @@ impl EditorView {
                 },
             )));
         }
+        // Wraps onto a second line instead of clipping in narrow windows.
         div()
             .flex()
             .flex_row()
+            .flex_none()
+            .flex_wrap()
             .items_center()
             .justify_between()
-            .h(px(RIBBON_H))
+            .gap_x_4()
+            .gap_y_1()
+            .min_h(px(RIBBON_H))
             .px_2()
+            .py_1()
             .bg(rgb(BG_RIBBON))
             .border_b_1()
             .border_color(rgb(BORDER))
@@ -374,8 +379,10 @@ impl EditorView {
                 div()
                     .flex()
                     .flex_row()
+                    .flex_wrap()
                     .items_center()
-                    .gap_4()
+                    .gap_x_4()
+                    .gap_y_1()
                     .child(tools)
                     .child(brush_controls),
             )
@@ -384,7 +391,7 @@ impl EditorView {
                     .flex()
                     .flex_row()
                     .items_center()
-                    .gap_1()
+                    .gap_2()
                     .child(
                         div()
                             .relative()
@@ -396,8 +403,8 @@ impl EditorView {
                     .child(
                         div()
                             .flex()
-                            .flex_col()
-                            .gap(px(2.))
+                            .flex_row()
+                            .gap_1()
                             .child(chip_button("swap-colors", "⇄").on_click(cx.listener(
                                 |this, _, _, cx| {
                                     this.edit(cx, |s| s.swap_colors());
@@ -664,42 +671,42 @@ impl EditorView {
         }
     }
 
-    fn panels(&self) -> Div {
-        div()
+    /// The right-hand column: Layers, Filter and Swatches under collapsible
+    /// headers. Sections take their natural height; the column scrolls.
+    fn panels(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        let sections = self.state.read(cx).panels;
+        let mut column = div()
+            .id("panel-column")
             .w(px(PANEL_W))
+            .flex_none()
             .h_full()
             .flex()
             .flex_col()
             .bg(rgb(BG_PANEL))
             .border_l_1()
             .border_color(rgb(BORDER))
-            .overflow_hidden()
-            // In short windows Filter (which scrolls) and Swatches shrink.
-            .child(
-                div()
-                    .flex_1()
-                    .min_h(px(LAYERS_MIN_H))
-                    .overflow_hidden()
-                    .child(self.layers_panel.clone()),
-            )
-            .child(
-                div()
-                    .h(px(FILTER_H))
-                    .min_h(px(120.))
-                    .border_b_1()
-                    .border_color(rgb(BORDER))
-                    .overflow_hidden()
-                    .child(self.filter_panel.clone()),
-            )
-            .child(
-                div()
-                    .h(px(SWATCHES_H))
-                    .min_h(px(60.))
-                    .border_b_1()
-                    .border_color(rgb(BORDER))
-                    .overflow_hidden()
-                    .child(self.swatches_panel.clone()),
-            )
+            .overflow_y_scroll();
+        for section in PanelSection::ALL {
+            column = column.child(section_header(section, &sections).on_click(cx.listener(
+                move |this, _, _, cx| {
+                    this.edit(cx, |s| s.toggle_panel(section));
+                },
+            )));
+            if sections.is_collapsed(section) {
+                continue;
+            }
+            let body = div()
+                .flex_none()
+                .w_full()
+                .border_b_1()
+                .border_color(rgb(BORDER));
+            column = column.child(match section {
+                PanelSection::Layers => body.child(self.layers_panel.clone()),
+                PanelSection::Filter => body.child(self.filter_panel.clone()),
+                PanelSection::Swatches => body.child(self.swatches_panel.clone()),
+            });
+        }
+        column
     }
 
     fn status_bar(&self, cx: &App) -> Div {
@@ -778,16 +785,19 @@ pub(crate) fn rgba(c: Rgb) -> Rgba {
 fn chip_button(id: &'static str, glyph: &'static str) -> Stateful<Div> {
     div()
         .id(id)
-        .w(px(16.))
-        .h(px(16.))
+        .w(px(26.))
+        .h(px(26.))
         .flex()
+        .flex_none()
         .items_center()
         .justify_center()
         .rounded_sm()
-        .text_xs()
-        .text_color(rgb(TEXT_DIM))
+        .border_1()
+        .border_color(rgb(0x404040))
+        .text_base()
+        .text_color(rgb(TEXT))
         .cursor_pointer()
-        .hover(|s| s.bg(rgb(BG_HOVER)).text_color(rgb(TEXT)))
+        .hover(|s| s.bg(rgb(BG_HOVER)).text_color(rgb(0xffffff)))
         .child(glyph)
 }
 
@@ -809,6 +819,33 @@ pub(crate) fn panel_header(title: &'static str) -> Div {
         .text_xs()
         .text_color(rgb(TEXT))
         .child(title)
+}
+
+/// Clickable header of a panel-column section: disclosure glyph and title.
+fn section_header(section: PanelSection, sections: &PanelSections) -> Stateful<Div> {
+    div()
+        .id(SharedString::from(format!("section-{section:?}")))
+        .flex_none()
+        .h(px(SECTION_HEADER_H))
+        .px_2()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .bg(rgb(BG_PANEL_HEADER))
+        .border_b_1()
+        .border_color(rgb(BORDER))
+        .text_xs()
+        .text_color(rgb(TEXT))
+        .cursor_pointer()
+        .hover(|s| s.bg(rgb(BG_HOVER)))
+        .child(
+            div()
+                .w(px(10.))
+                .text_color(rgb(TEXT_DIM))
+                .child(sections.glyph(section)),
+        )
+        .child(section.title())
 }
 
 impl Render for EditorView {
@@ -859,7 +896,7 @@ impl Render for EditorView {
                     .flex()
                     .flex_row()
                     .child(self.canvas_area(cx))
-                    .child(self.panels()),
+                    .child(self.panels(cx)),
             )
             .child(self.status_bar(cx))
             .when(menu_open, |root| {
