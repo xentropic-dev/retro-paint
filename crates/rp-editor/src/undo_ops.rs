@@ -494,7 +494,7 @@ impl EditorState {
 
     /// Whether undo/redo are blocked by a modal dialog.
     fn history_blocked(&self) -> bool {
-        self.file_modal_open() || self.project_dialog.is_some()
+        self.file_modal_open() || self.project_dialog.is_some() || self.color_picker.is_some()
     }
 
     /// Runs an Edit-menu command (or its key binding). Closes the menus.

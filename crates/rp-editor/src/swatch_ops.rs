@@ -104,7 +104,12 @@ impl EditorState {
 
     /// Swatches panel "+": saves the foreground. See [`add_swatch`].
     pub fn add_fg_swatch(&mut self) -> AddSwatch {
-        let c = self.document.fg;
+        self.add_color_swatch(self.document.fg)
+    }
+
+    /// Saves `c` as a swatch (an undo step) and says so in the status bar.
+    /// See [`add_swatch`].
+    pub fn add_color_swatch(&mut self, c: Rgb) -> AddSwatch {
         let r = self.record(EditLabel::AddSwatch, |s| {
             add_swatch(&mut s.document.swatches, c)
         });

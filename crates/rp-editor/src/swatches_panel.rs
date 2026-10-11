@@ -7,6 +7,8 @@
 
 use gpui::{Context, Entity, MouseButton, SharedString, Window, div, prelude::*, px, rgb};
 
+use crate::color_picker::ColorPickerDialog;
+use crate::color_picker_ops::PickerTarget;
 use crate::layers_panel::button;
 use crate::state::EditorState;
 use crate::swatch_ops::MAX_SWATCHES;
@@ -16,12 +18,18 @@ const CELL: f32 = 18.;
 
 pub(crate) struct SwatchesPanel {
     state: Entity<EditorState>,
+    /// "+ New color…" opens this and gives it the keyboard.
+    picker: Entity<ColorPickerDialog>,
 }
 
 impl SwatchesPanel {
-    pub(crate) fn new(state: Entity<EditorState>, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(
+        state: Entity<EditorState>,
+        picker: Entity<ColorPickerDialog>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         cx.observe(&state, |_, _, cx| cx.notify()).detach();
-        Self { state }
+        Self { state, picker }
     }
 
     fn edit<R>(&self, cx: &mut Context<Self>, f: impl FnOnce(&mut EditorState) -> R) -> R {
@@ -52,6 +60,14 @@ impl Render for SwatchesPanel {
             .child(button("swatch-remove", "− Remove fg").on_click(cx.listener(
                 |this, _, _, cx| {
                     this.edit(cx, |s| s.remove_fg_swatch());
+                },
+            )))
+            .child(button("swatch-new", "+ New color…").on_click(cx.listener(
+                |this, _, window, cx| {
+                    this.edit(cx, |s| s.open_color_picker(PickerTarget::NewSwatch));
+                    if this.state.read(cx).color_picker.is_some() {
+                        this.picker.update(cx, |d, cx| d.focus(window, cx));
+                    }
                 },
             )))
             .child(

@@ -10,6 +10,7 @@ use std::sync::Arc;
 use rp_doc::{Document, Layer, LayerId, LayerKind, RgbaImage, Size, SourceStore, Tool};
 use rp_format::ExportOptions;
 
+use crate::color_picker_ops::ColorPicker;
 use crate::file_ops::{Alert, ExportDraft, PendingAction, SavedMark};
 use crate::filter_ops::PaletteMemory;
 use crate::layer_ops::RenameEdit;
@@ -227,6 +228,8 @@ pub struct EditorState {
     pub shift_held: bool,
     /// The Project Settings dialog's draft while it is open.
     pub project_dialog: Option<ProjectDraft>,
+    /// The color picker popover while it is open.
+    pub color_picker: Option<ColorPicker>,
     /// The project file the document was last saved to or opened from.
     pub current_path: Option<PathBuf>,
     /// The document as last saved or opened; see [`EditorState::is_dirty`].
@@ -290,6 +293,7 @@ impl EditorState {
             transform_drag: None,
             shift_held: false,
             project_dialog: None,
+            color_picker: None,
             current_path: None,
             saved,
             unsaved_prompt: None,
@@ -319,6 +323,7 @@ impl EditorState {
         self.transform_drag = None;
         self.palette_memory = PaletteMemory::default();
         self.project_dialog = None;
+        self.color_picker = None;
         self.document = document;
         self.viewport.set_canvas_size(s.width, s.height);
         self.auto_fit = true;
@@ -416,7 +421,7 @@ impl EditorState {
     /// Runs a File-menu command. Always closes the File dropdown.
     pub fn dispatch(&mut self, cmd: FileCommand) -> Outcome {
         self.close_menus();
-        if self.file_modal_open() {
+        if self.file_modal_open() || self.color_picker.is_some() {
             return Outcome::Done;
         }
         let file_job = !matches!(cmd, FileCommand::InsertImage | FileCommand::ProjectSettings);

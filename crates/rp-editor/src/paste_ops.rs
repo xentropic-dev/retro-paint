@@ -203,7 +203,7 @@ impl EditorState {
     /// `Pasting…`.
     pub fn begin_paste(&mut self) -> bool {
         self.close_menus();
-        if self.file_modal_open() || self.project_dialog.is_some() {
+        if self.file_modal_open() || self.project_dialog.is_some() || self.color_picker.is_some() {
             return false;
         }
         self.finish_gestures();

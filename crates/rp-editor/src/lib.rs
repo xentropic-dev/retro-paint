@@ -13,6 +13,8 @@
 
 pub mod canvas_image;
 mod canvas_view;
+mod color_picker;
+pub mod color_picker_ops;
 mod file_dialog;
 mod file_flow;
 pub mod file_ops;

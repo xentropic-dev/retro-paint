@@ -11,6 +11,8 @@ use rp_doc::Tool;
 use rp_palette_dither::Rgb;
 
 use crate::canvas_view::{self, CanvasCache};
+use crate::color_picker::ColorPickerDialog;
+use crate::color_picker_ops::PickerTarget;
 use crate::file_dialog::FileDialog;
 use crate::file_flow::handle_outcome;
 use crate::filter_panel::FilterPanel;
@@ -135,6 +137,7 @@ pub(crate) struct EditorView {
     filter_panel: Entity<FilterPanel>,
     swatches_panel: Entity<SwatchesPanel>,
     project_dialog: Entity<ProjectDialog>,
+    color_picker: Entity<ColorPickerDialog>,
     file_dialog: Entity<FileDialog>,
     /// Last title given to the window (file name, • while dirty).
     title: String,
@@ -164,8 +167,10 @@ impl EditorView {
         .detach();
         let layers_panel = cx.new(|cx| LayersPanel::new(state.clone(), window, cx));
         let filter_panel = cx.new(|cx| FilterPanel::new(state.clone(), cx));
-        let swatches_panel = cx.new(|cx| SwatchesPanel::new(state.clone(), cx));
         let project_dialog = cx.new(|cx| ProjectDialog::new(state.clone(), focus.clone(), cx));
+        let color_picker = cx.new(|cx| ColorPickerDialog::new(state.clone(), focus.clone(), cx));
+        let swatches_panel =
+            cx.new(|cx| SwatchesPanel::new(state.clone(), color_picker.clone(), cx));
         let file_dialog = cx.new(|cx| FileDialog::new(state.clone(), focus.clone(), cx));
         // The window's close button asks about unsaved changes like Quit.
         let (close_state, close_dialog) = (state.clone(), file_dialog.clone());
@@ -186,6 +191,7 @@ impl EditorView {
             filter_panel,
             swatches_panel,
             project_dialog,
+            color_picker,
             file_dialog,
             title: String::new(),
             focus,
@@ -464,8 +470,24 @@ impl EditorView {
                             .relative()
                             .w(px(34.))
                             .h(px(34.))
-                            .child(color_chip(doc.bg).absolute().right_0().bottom_0())
-                            .child(color_chip(doc.fg).absolute().left_0().top_0()),
+                            .child(
+                                color_chip("bg-chip", doc.bg)
+                                    .absolute()
+                                    .right_0()
+                                    .bottom_0()
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_picker(PickerTarget::Background, window, cx);
+                                    })),
+                            )
+                            .child(
+                                color_chip("fg-chip", doc.fg)
+                                    .absolute()
+                                    .left_0()
+                                    .top_0()
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_picker(PickerTarget::Foreground, window, cx);
+                                    })),
+                            ),
                     )
                     .child(
                         div()
@@ -484,6 +506,14 @@ impl EditorView {
                             ))),
                     ),
             )
+    }
+
+    /// Opens the color picker on `target` and gives it the keyboard.
+    fn open_picker(&mut self, target: PickerTarget, window: &mut Window, cx: &mut Context<Self>) {
+        self.edit(cx, |s| s.open_color_picker(target));
+        if self.state.read(cx).color_picker.is_some() {
+            self.color_picker.update(cx, |d, cx| d.focus(window, cx));
+        }
     }
 
     /// Brush size stepper (`[` / `]`) and the Hard/Soft tip toggle.
@@ -907,8 +937,13 @@ fn chip_button(id: &'static str, glyph: &'static str) -> Stateful<Div> {
         .child(glyph)
 }
 
-fn color_chip(c: Rgb) -> Div {
+/// A clickable fg/bg chip (opens the color picker).
+fn color_chip(id: &'static str, c: Rgb) -> Stateful<Div> {
     div()
+        .id(id)
+        .cursor_pointer()
+        // The fg chip overlaps the bg chip; only the top one gets the click.
+        .occlude()
         .w(px(22.))
         .h(px(22.))
         .bg(rgba(c))
@@ -961,6 +996,7 @@ impl Render for EditorView {
         let file_menu_open = self.state.read(cx).file_menu_open;
         let dialog_open = self.state.read(cx).project_dialog.is_some();
         let file_modal = self.state.read(cx).file_modal_open();
+        let picker_open = self.state.read(cx).color_picker.is_some();
         let title = self.state.read(cx).window_title();
         if title != self.title {
             window.set_window_title(&title);
@@ -1049,6 +1085,34 @@ impl Render for EditorView {
                         .bg(gpui::rgba(0x00000099))
                         .occlude()
                         .child(self.project_dialog.clone()),
+                )
+            })
+            .when(picker_open, |root| {
+                // A popover under the ribbon's color chips. The backdrop
+                // keeps it modal; a click outside cancels it.
+                root.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .bottom_0()
+                        .bg(gpui::rgba(0x00000040))
+                        .occlude()
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, window, cx| {
+                                this.edit(cx, |s| s.cancel_color_picker());
+                                window.focus(&this.focus, cx);
+                            }),
+                        ),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .top(px(MENU_BAR_H + RIBBON_H + 4.))
+                        .right(px(8.))
+                        .child(self.color_picker.clone()),
                 )
             })
             .when(file_modal, |root| {
