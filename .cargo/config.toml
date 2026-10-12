@@ -1,0 +1,4 @@
+# Applies to every cargo command in this repo and its worktrees. A full
+# workspace build at 16 jobs exhausted the desktop's 31 GB of RAM and hung it.
+[build]
+jobs = 6
