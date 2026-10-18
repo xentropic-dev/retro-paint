@@ -49,9 +49,7 @@ const CELL: u32 = 64;
 fn real_abr_files() {
     let dir = std::env::var_os("ABR_BRUSH_DIR")
         .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join("brushes"))
-        });
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join("brushes")));
     let Some(dir) = dir else { return };
     let mut files = Vec::new();
     find_abr(&dir, &mut files);

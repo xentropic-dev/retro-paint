@@ -1,2 +1,5 @@
 /target
 *.actual.png
+
+# Local Hyprland rules copied from contrib/hyprland.example.conf
+/contrib/hyprland.conf

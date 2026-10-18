@@ -30,9 +30,7 @@ fn find_abr(dir: &Path, out: &mut Vec<PathBuf>) {
 fn real_splatter() -> Option<Brush> {
     let dir = std::env::var_os("ABR_BRUSH_DIR")
         .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join("brushes"))
-        })?;
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join("brushes")))?;
     let mut files = Vec::new();
     find_abr(&dir, &mut files);
     let path = files.first()?;

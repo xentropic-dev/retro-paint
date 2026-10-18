@@ -12,7 +12,7 @@ use crate::{IndexedScreen, Rect, ScrollState, canvas_viewport, compose, tube_rec
 
 /// Default DOS window size in pixels for `layout`: 9:16 for mobile, 16:9
 /// for desktop. Only a request: the compositor may override it (see
-/// `contrib/hyprland.conf` for window rules), and the tube is fit to the
+/// `contrib/hyprland.example.conf` for window rules), and the tube is fit to the
 /// real size with [`frame_tube`].
 pub const fn window_size(layout: Layout) -> (i32, i32) {
     match layout {

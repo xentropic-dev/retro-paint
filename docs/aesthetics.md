@@ -24,7 +24,7 @@ The DOS view supports two layouts:
 
 ## Multi-monitor layout (default)
 
-The two views can be split across monitors, and this is the default (see `contrib/hyprland.conf`):
+The two views can be split across monitors, and this is the default (see `contrib/hyprland.example.conf`):
 
 - **Left monitor:** the full-color view with the real UI.
 - **Right monitor (vertical):** the DOS view with the filter applied, in the mobile view. The vertical monitor captures well for mobile.

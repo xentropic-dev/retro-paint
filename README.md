@@ -40,7 +40,7 @@ Debug builds (`cargo run -p retro-paint`) also work. The workspace builds third-
 
 ## Hyprland setup
 
-[contrib/hyprland.conf](contrib/hyprland.conf) has window rules that put the editor on the left monitor and the DOS view full-size on a vertical right monitor, with opacity, blur, dimming, borders and rounding turned off so captured pixels stay exact. Set your monitor names at the top of the file, then source it from `~/.config/hypr/hyprland.conf`. See [contrib/README.md](contrib/README.md) for the steps, the desktop (16:9) variant, single-monitor use and OBS capture.
+[contrib/hyprland.example.conf](contrib/hyprland.example.conf) has example window rules that put the editor on the left monitor and the DOS view full-size on a vertical right monitor, with opacity, blur, dimming, borders and rounding turned off so captured pixels stay exact. Copy it to `contrib/hyprland.conf` (gitignored), set your monitor names at the top, then source your copy from `~/.config/hypr/hyprland.conf`. See [contrib/README.md](contrib/README.md) for the steps, the desktop (16:9) variant, single-monitor use and OBS capture.
 
 ## Keyboard shortcuts
 
