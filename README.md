@@ -11,11 +11,12 @@ Every pixel of the dithered output, in the DOS view and in exported PNGs, is one
 
 ## Screenshots
 
-Placeholders until real captures are added:
+The same picture in both windows: the full-color editor, and the DOS view's mobile layout (200×320, Floyd–Steinberg to the 16 CGA colors, through the CRT shader).
 
-- `docs/screenshots/editor.png`: the full-color editor
-- `docs/screenshots/dos-mobile.png`: the DOS view, mobile layout (200×320)
-- `docs/screenshots/dos-desktop.png`: the DOS view, desktop layout (320×200)
+<p>
+  <img src="docs/screenshots/editor.png" alt="The full-color editor with layers, filter, swatches and brushes panels" width="640">
+  <img src="docs/screenshots/dos-mobile.png" alt="The DOS view in the mobile layout, dithered to CGA and drawn through the CRT shader" width="300">
+</p>
 
 ## Build and run
 
